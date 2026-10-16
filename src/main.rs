@@ -1,7 +1,7 @@
 mod diff;
 mod model;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use model::{build_tree, Node, StewMap, Steward};
 use std::collections::BTreeMap;
@@ -32,6 +32,12 @@ enum Command {
     Stats,
     /// Read a unified diff from stdin and attribute it to stewards
     Diff,
+    /// Show the stewards of a directory and the .stew file naming them
+    Show {
+        /// Directory to look up
+        #[arg(default_value = ".")]
+        dir: PathBuf,
+    },
 }
 
 fn main() -> Result<()> {
@@ -46,6 +52,7 @@ fn main() -> Result<()> {
         Command::Tree => tree(&map),
         Command::Stats => stats(&map)?,
         Command::Diff => cmd_diff(&map)?,
+        Command::Show { dir } => show(&map, &dir)?,
     }
     Ok(())
 }
@@ -155,6 +162,41 @@ fn count_lines(path: &Path) -> Result<Option<usize>> {
     let newlines = bytes.iter().filter(|&&b| b == b'\n').count();
     let partial = usize::from(!bytes.is_empty() && *bytes.last().unwrap() != b'\n');
     Ok(Some(newlines + partial))
+}
+
+// ---------------------------------------------------------------- show ----
+
+fn show(map: &StewMap, dir: &Path) -> Result<()> {
+    let abs = dir
+        .canonicalize()
+        .with_context(|| format!("cannot resolve {}", dir.display()))?;
+    if !abs.is_dir() {
+        anyhow::bail!("{} is not a directory", dir.display());
+    }
+    let rel = abs.strip_prefix(&map.root).map_err(|_| {
+        anyhow::anyhow!(
+            "{} is outside the project root {}",
+            dir.display(),
+            map.root.display()
+        )
+    })?;
+    let label = if rel.as_os_str().is_empty() {
+        ".".to_string()
+    } else {
+        rel.display().to_string()
+    };
+    println!("directory:  {label}");
+    match map.governing_dir(rel) {
+        Some(owner) => {
+            println!("stewards:   {}", fmt_stewards(&map.dirs[owner]));
+            println!("defined by: {}", owner.join(model::STEW_FILE).display());
+        }
+        None => {
+            println!("stewards:   (no steward)");
+            println!("defined by: (none)");
+        }
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------- diff ----

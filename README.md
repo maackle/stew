@@ -36,6 +36,18 @@ total. Walks the tree respecting `.gitignore`, skips binary files and the
 `.stew`/`stew.toml` metadata files themselves. When a directory names
 multiple stewards, its lines count fully toward each of them.
 
+### `stew show [DIR]`
+
+Shows the stewards of a directory (the current directory by default) and the
+`.stew` file that names them:
+
+```
+$ stew show x/y
+directory:  x/y
+stewards:   A <a@example.com>
+defined by: x/.stew
+```
+
 ### `stew diff`
 
 Reads a unified diff (`git diff`, `diff -u`) from stdin and groups the

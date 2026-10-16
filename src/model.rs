@@ -95,6 +95,24 @@ impl StewMap {
         })
     }
 
+    /// The directory (relative to the root) whose `.stew` governs `rel`:
+    /// the nearest directory at or above `rel` with a `.stew` file. `None`
+    /// if no `.stew` governs it.
+    pub fn governing_dir(&self, rel: &Path) -> Option<&Path> {
+        let mut dir = Some(rel);
+        while let Some(d) = dir {
+            if let Some((k, _)) = self.dirs.get_key_value(d) {
+                return Some(k);
+            }
+            dir = if d.as_os_str().is_empty() {
+                None
+            } else {
+                d.parent().or(Some(Path::new("")))
+            };
+        }
+        None
+    }
+
     /// The stewards owning a file path (relative to the root): those named
     /// by the nearest `.stew` at or above its directory. `None` if no
     /// `.stew` governs it.

@@ -93,6 +93,24 @@ fn diff_attributes_changes() {
 }
 
 #[test]
+fn show_names_stewards_and_stew_file() {
+    let dir = scratch();
+    // x/y has no .stew of its own; x/.stew governs it.
+    let sub = dir.path().join("x/y").display().to_string();
+    let out = run(dir.path(), &["show", &sub], None);
+    assert!(out.contains("directory:  x/y"), "{out}");
+    assert!(out.contains("stewards:   A <a@example.com>"), "{out}");
+    assert!(out.contains("defined by: x/.stew"), "{out}");
+
+    // The root itself.
+    let root = dir.path().display().to_string();
+    let out = run(dir.path(), &["show", &root], None);
+    assert!(out.contains("directory:  ."), "{out}");
+    assert!(out.contains("stewards:   Root <r@example.com>"), "{out}");
+    assert!(out.contains("defined by: .stew"), "{out}");
+}
+
+#[test]
 fn missing_manifest_is_an_error() {
     let dir = tempfile::tempdir().unwrap();
     let status = stew()
