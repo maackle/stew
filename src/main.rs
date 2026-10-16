@@ -32,8 +32,8 @@ enum Command {
     Stats,
     /// Read a unified diff from stdin and attribute it to stewards
     Diff,
-    /// Show the stewards of a directory and the .stew file naming them
-    Show {
+    /// Print the path of the .stew file governing a directory
+    Which {
         /// Directory to look up
         #[arg(default_value = ".")]
         dir: PathBuf,
@@ -52,7 +52,7 @@ fn main() -> Result<()> {
         Command::Tree => tree(&map),
         Command::Stats => stats(&map)?,
         Command::Diff => cmd_diff(&map)?,
-        Command::Show { dir } => show(&map, &dir)?,
+        Command::Which { dir } => which(&map, &dir)?,
     }
     Ok(())
 }
@@ -164,9 +164,10 @@ fn count_lines(path: &Path) -> Result<Option<usize>> {
     Ok(Some(newlines + partial))
 }
 
-// ---------------------------------------------------------------- show ----
+// --------------------------------------------------------------- which ----
 
-fn show(map: &StewMap, dir: &Path) -> Result<()> {
+/// Resolve `dir` to a path relative to the project root.
+fn resolve_dir(map: &StewMap, dir: &Path) -> Result<PathBuf> {
     let abs = dir
         .canonicalize()
         .with_context(|| format!("cannot resolve {}", dir.display()))?;
@@ -180,23 +181,24 @@ fn show(map: &StewMap, dir: &Path) -> Result<()> {
             map.root.display()
         )
     })?;
-    let label = if rel.as_os_str().is_empty() {
-        ".".to_string()
-    } else {
-        rel.display().to_string()
-    };
-    println!("directory:  {label}");
-    match map.governing_dir(rel) {
+    Ok(rel.to_path_buf())
+}
+
+/// Print the absolute path of the governing .stew file to stdout, so it can
+/// be piped (e.g. `cat $(stew which)`). If none applies, print a message to
+/// stderr and exit non-zero, keeping stdout clean.
+fn which(map: &StewMap, dir: &Path) -> Result<()> {
+    let rel = resolve_dir(map, dir)?;
+    match map.governing_dir(&rel) {
         Some(owner) => {
-            println!("stewards:   {}", fmt_stewards(&map.dirs[owner]));
-            println!("defined by: {}", owner.join(model::STEW_FILE).display());
+            println!("{}", map.root.join(owner).join(model::STEW_FILE).display());
+            Ok(())
         }
         None => {
-            println!("stewards:   (no steward)");
-            println!("defined by: (none)");
+            eprintln!("no .stew file at this level");
+            std::process::exit(1);
         }
     }
-    Ok(())
 }
 
 // ---------------------------------------------------------------- diff ----
