@@ -92,22 +92,158 @@ fn diff_attributes_changes() {
     assert!(out.contains("Root <r@example.com>  (+1 -1)"), "{out}");
 }
 
+/// Like `run`, but returns (success, stdout) and feeds `stdin` if given.
+fn try_run(root: &Path, args: &[&str], stdin: Option<&str>) -> (bool, String) {
+    let mut cmd = stew();
+    cmd.arg("--root").arg(root).args(args);
+    cmd.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null());
+    let mut child = cmd.spawn().unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(stdin.unwrap_or("").as_bytes())
+        .unwrap();
+    let out = child.wait_with_output().unwrap();
+    (out.status.success(), String::from_utf8(out.stdout).unwrap())
+}
+
 #[test]
-fn show_names_stewards_and_stew_file() {
+fn which_prints_governing_stew_file() {
     let dir = scratch();
     // x/y has no .stew of its own; x/.stew governs it.
     let sub = dir.path().join("x/y").display().to_string();
-    let out = run(dir.path(), &["show", &sub], None);
-    assert!(out.contains("directory:  x/y"), "{out}");
-    assert!(out.contains("stewards:   A <a@example.com>"), "{out}");
-    assert!(out.contains("defined by: x/.stew"), "{out}");
+    let out = run(dir.path(), &["which", &sub], None);
+    assert_eq!(out.trim(), dir.path().join("x/.stew").display().to_string());
+}
 
-    // The root itself.
+#[test]
+fn which_fails_when_nothing_governs() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(dir.path().join("stew.toml"), "").unwrap();
     let root = dir.path().display().to_string();
-    let out = run(dir.path(), &["show", &root], None);
-    assert!(out.contains("directory:  ."), "{out}");
-    assert!(out.contains("stewards:   Root <r@example.com>"), "{out}");
-    assert!(out.contains("defined by: .stew"), "{out}");
+    let (ok, out) = try_run(dir.path(), &["which", &root], None);
+    assert!(!ok);
+    assert_eq!(out, "", "stdout must stay clean for pipes");
+}
+
+#[test]
+fn add_creates_file_and_announces_parent_effect() {
+    let dir = scratch();
+    let sub = dir.path().join("x/y").display().to_string();
+    let out = run(dir.path(), &["add", &sub, "C <c@example.com>", "-y"], None);
+    assert!(out.contains("away from x/.stew"), "{out}");
+    assert!(out.contains("- A <a@example.com>"), "{out}");
+    assert!(out.contains("added C <c@example.com> to x/y/.stew"), "{out}");
+    assert_eq!(
+        fs::read_to_string(dir.path().join("x/y/.stew")).unwrap(),
+        "C <c@example.com>\n"
+    );
+}
+
+#[test]
+fn add_appends_and_ignores_duplicates() {
+    let dir = scratch();
+    let x = dir.path().join("x").display().to_string();
+    run(dir.path(), &["add", &x, "C <c@example.com>", "-y"], None);
+    assert_eq!(
+        fs::read_to_string(dir.path().join("x/.stew")).unwrap(),
+        "# owner\nA <a@example.com>\nC <c@example.com>\n"
+    );
+    let out = run(dir.path(), &["add", &x, "A <a@example.com>", "-y"], None);
+    assert!(out.contains("already a steward"), "{out}");
+    assert_eq!(
+        fs::read_to_string(dir.path().join("x/.stew")).unwrap(),
+        "# owner\nA <a@example.com>\nC <c@example.com>\n"
+    );
+}
+
+#[test]
+fn add_quiet_suppresses_result_line() {
+    let dir = scratch();
+    let x = dir.path().join("x").display().to_string();
+    let out = run(dir.path(), &["add", &x, "C <c@example.com>", "-y", "-q"], None);
+    assert!(!out.contains("added"), "{out}");
+}
+
+#[test]
+fn add_prompt_can_be_declined() {
+    let dir = scratch();
+    let sub = dir.path().join("x/y").display().to_string();
+    let (ok, out) = try_run(dir.path(), &["add", &sub, "C <c@example.com>"], Some("n\n"));
+    assert!(!ok);
+    assert!(out.contains("Proceed? [y/N]"), "{out}");
+    assert!(!dir.path().join("x/y/.stew").exists());
+
+    let (ok, _) = try_run(dir.path(), &["add", &sub, "C <c@example.com>"], Some("y\n"));
+    assert!(ok);
+    assert!(dir.path().join("x/y/.stew").exists());
+}
+
+#[test]
+fn remove_last_steward_leaves_empty_file_meaning_unowned() {
+    let dir = scratch();
+    let z = dir.path().join("x/y/z").display().to_string();
+    let out = run(dir.path(), &["remove", &z, "B <b@example.com>", "-y"], None);
+    assert!(out.contains("leaves x/y/z/.stew empty"), "{out}");
+    assert!(out.contains("fall back to x/.stew"), "{out}");
+    assert_eq!(fs::read_to_string(dir.path().join("x/y/z/.stew")).unwrap(), "");
+
+    // The empty file is honoured: two.rs is now unowned, not A's.
+    let out = run(dir.path(), &["stats"], None);
+    let line = |s: &str| out.lines().find(|l| l.contains(s)).unwrap().to_string();
+    assert!(line("(unowned)").contains('3'), "{out}");
+    assert!(line("A <a@example.com>").contains('2'), "{out}");
+    let out = run(dir.path(), &["tree"], None);
+    assert!(out.contains("y/z — (no steward)"), "{out}");
+}
+
+#[test]
+fn remove_keeps_comments_and_other_stewards() {
+    let dir = scratch();
+    let x = dir.path().join("x").display().to_string();
+    run(dir.path(), &["add", &x, "C <c@example.com>", "-y"], None);
+    run(dir.path(), &["remove", &x, "A <a@example.com>", "-y"], None);
+    assert_eq!(
+        fs::read_to_string(dir.path().join("x/.stew")).unwrap(),
+        "# owner\nC <c@example.com>\n"
+    );
+}
+
+#[test]
+fn me_uses_git_config_and_rm_is_an_alias() {
+    let dir = scratch();
+    let git = |args: &[&str]| {
+        assert!(Command::new("git")
+            .arg("-C")
+            .arg(dir.path())
+            .args(args)
+            .stdout(Stdio::null())
+            .status()
+            .unwrap()
+            .success());
+    };
+    git(&["init", "-q"]);
+    git(&["config", "user.name", "Me Myself"]);
+    git(&["config", "user.email", "me@example.com"]);
+
+    let x = dir.path().join("x").display().to_string();
+    let out = run(dir.path(), &["add", "me", &x, "-y"], None);
+    assert!(out.contains("added Me Myself <me@example.com> to x/.stew"), "{out}");
+    let out = run(dir.path(), &["rm", "me", &x, "-y"], None);
+    assert!(out.contains("removed Me Myself <me@example.com> from x/.stew"), "{out}");
+    assert_eq!(
+        fs::read_to_string(dir.path().join("x/.stew")).unwrap(),
+        "# owner\nA <a@example.com>\n"
+    );
+}
+
+#[test]
+fn remove_without_file_is_an_error() {
+    let dir = scratch();
+    let sub = dir.path().join("x/y").display().to_string();
+    let (ok, _) = try_run(dir.path(), &["remove", &sub, "A <a@example.com>", "-y"], None);
+    assert!(!ok);
 }
 
 #[test]

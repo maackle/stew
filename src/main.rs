@@ -1,7 +1,8 @@
 mod diff;
+mod edit;
 mod model;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use clap::{Parser, Subcommand};
 use model::{build_tree, Node, StewMap, Steward};
 use std::collections::BTreeMap;
@@ -38,6 +39,31 @@ enum Command {
         #[arg(default_value = ".")]
         dir: PathBuf,
     },
+    /// Add a steward to DIR/.stew, creating the file if needed
+    ///
+    /// `stew add me DIR` adds the identity from git config
+    /// (user.name <user.email>).
+    #[command(override_usage = "stew add [OPTIONS] <DIR> <STEWARD>\n       stew add [OPTIONS] me <DIR>")]
+    Add {
+        #[command(flatten)]
+        target: edit::Target,
+        #[command(flatten)]
+        opts: edit::Opts,
+    },
+    /// Remove a steward from DIR/.stew (alias: rm)
+    ///
+    /// `stew remove me DIR` removes the identity from git config
+    /// (user.name <user.email>).
+    #[command(
+        alias = "rm",
+        override_usage = "stew remove [OPTIONS] <DIR> <STEWARD>\n       stew remove [OPTIONS] me <DIR>"
+    )]
+    Remove {
+        #[command(flatten)]
+        target: edit::Target,
+        #[command(flatten)]
+        opts: edit::Opts,
+    },
 }
 
 fn main() -> Result<()> {
@@ -53,6 +79,14 @@ fn main() -> Result<()> {
         Command::Stats => stats(&map)?,
         Command::Diff => cmd_diff(&map)?,
         Command::Which { dir } => which(&map, &dir)?,
+        Command::Add { target, opts } => {
+            let (dir, steward) = target.resolve(&map.root)?;
+            edit::add(&map, &dir, &steward, &opts)?
+        }
+        Command::Remove { target, opts } => {
+            let (dir, steward) = target.resolve(&map.root)?;
+            edit::remove(&map, &dir, &steward, &opts)?
+        }
     }
     Ok(())
 }
@@ -116,13 +150,14 @@ fn stats(map: &StewMap) -> Result<()> {
         total += lines;
         let rel = entry.path().strip_prefix(&map.root).unwrap();
         match map.stewards_of_file(&rel.to_string_lossy()) {
-            Some(stewards) => {
+            Some(stewards) if !stewards.is_empty() => {
                 shared |= stewards.len() > 1;
                 for s in stewards {
                     *lines_by_steward.entry(s.clone()).or_default() += lines;
                 }
             }
-            None => *lines_by_steward.entry(UNOWNED.to_string()).or_default() += lines,
+            // No governing .stew, or an empty one: both mean unowned.
+            _ => *lines_by_steward.entry(UNOWNED.to_string()).or_default() += lines,
         }
     }
 
@@ -166,29 +201,11 @@ fn count_lines(path: &Path) -> Result<Option<usize>> {
 
 // --------------------------------------------------------------- which ----
 
-/// Resolve `dir` to a path relative to the project root.
-fn resolve_dir(map: &StewMap, dir: &Path) -> Result<PathBuf> {
-    let abs = dir
-        .canonicalize()
-        .with_context(|| format!("cannot resolve {}", dir.display()))?;
-    if !abs.is_dir() {
-        anyhow::bail!("{} is not a directory", dir.display());
-    }
-    let rel = abs.strip_prefix(&map.root).map_err(|_| {
-        anyhow::anyhow!(
-            "{} is outside the project root {}",
-            dir.display(),
-            map.root.display()
-        )
-    })?;
-    Ok(rel.to_path_buf())
-}
-
 /// Print the absolute path of the governing .stew file to stdout, so it can
 /// be piped (e.g. `cat $(stew which)`). If none applies, print a message to
 /// stderr and exit non-zero, keeping stdout clean.
 fn which(map: &StewMap, dir: &Path) -> Result<()> {
-    let rel = resolve_dir(map, dir)?;
+    let rel = map.resolve_dir(dir)?;
     match map.governing_dir(&rel) {
         Some(owner) => {
             println!("{}", map.root.join(owner).join(model::STEW_FILE).display());
@@ -216,8 +233,8 @@ fn cmd_diff(map: &StewMap) -> Result<()> {
     let mut groups: BTreeMap<String, Vec<&diff::FileDiff>> = BTreeMap::new();
     for f in &files {
         let key = match map.stewards_of_file(&f.path) {
-            Some(s) => fmt_stewards(s),
-            None => UNOWNED.to_string(),
+            Some(s) if !s.is_empty() => fmt_stewards(s),
+            _ => UNOWNED.to_string(),
         };
         groups.entry(key).or_default().push(f);
     }

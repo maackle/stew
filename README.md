@@ -14,6 +14,9 @@ A stewardship linter. `.stew` files scattered through a project define who
 - The stewards named in a `.stew` file own that directory's subtree, down to
   (but not including) any deeper directory with its own `.stew` file.
 - Files above the shallowest `.stew` files are unowned.
+- An *empty* `.stew` file (no stewards, only blanks/comments) is not the same
+  as a missing one: it says nobody stewards that directory or anything below
+  it, instead of inheriting from the nearest `.stew` above.
 
 ## Commands
 
@@ -36,16 +39,47 @@ total. Walks the tree respecting `.gitignore`, skips binary files and the
 `.stew`/`stew.toml` metadata files themselves. When a directory names
 multiple stewards, its lines count fully toward each of them.
 
-### `stew show [DIR]`
+### `stew which [DIR]`
 
-Shows the stewards of a directory (the current directory by default) and the
-`.stew` file that names them:
+Prints the path of the `.stew` file governing a directory (the current
+directory by default), and nothing else, so it can be piped:
 
 ```
-$ stew show x/y
-directory:  x/y
-stewards:   A <a@example.com>
-defined by: x/.stew
+$ cat $(stew which x/y)
+A <a@example.com>
+```
+
+If no `.stew` file applies, it says so on stderr and exits non-zero.
+
+### `stew add DIR STEWARD` / `stew remove DIR STEWARD`
+
+Add a steward to (or remove one from) `DIR/.stew`. `stew rm` is an alias for
+`stew remove`. `stew add me DIR` (likewise `stew remove me DIR`) uses the
+identity from git config, `user.name <user.email>`. `add` creates the file if
+it doesn't exist; adding an existing steward or removing an absent one is a
+no-op. Before making the change, both commands explain what it means for the
+tree and ask for confirmation. In particular, creating a new `.stew` takes
+the subtree away from the parent `.stew` that currently governs it, and
+removing the last steward leaves an empty file, which marks the subtree as
+unowned rather than handing it back to the parent:
+
+```
+$ stew add x/y "C <c@example.com>"
+Create x/y/.stew naming C <c@example.com>.
+This takes stewardship of x/y (and everything below it) away from x/.stew, which names:
+- A <a@example.com>
+
+Proceed? [y/N] y
+added C <c@example.com> to x/y/.stew
+```
+
+Flags: `-y`/`--yes` skips the prompt; `-q`/`--quiet` suppresses the
+confirmation line printed after the change.
+
+Note, a handy command to list all committers in a git repo is:
+
+```
+git shortlog -ens
 ```
 
 ### `stew diff`

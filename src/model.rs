@@ -55,7 +55,9 @@ pub fn parse_stew(text: &str) -> Vec<Steward> {
 
 /// The full stewardship map of a project: every directory (relative to the
 /// root) that contains a `.stew` file, with its stewards. Directories are
-/// keyed by their relative path (the root itself is keyed by `""`).
+/// keyed by their relative path (the root itself is keyed by `""`). An empty
+/// steward list means the directory has a `.stew` file that names nobody:
+/// the subtree is explicitly unowned, rather than inheriting from above.
 #[derive(Debug, Default)]
 pub struct StewMap {
     pub root: PathBuf,
@@ -75,10 +77,9 @@ impl StewMap {
             {
                 let text = fs::read_to_string(entry.path())
                     .with_context(|| format!("cannot read {}", entry.path().display()))?;
+                // An empty `.stew` is meaningful: it says nobody stewards
+                // this directory or anything below it.
                 let stewards = parse_stew(&text);
-                if stewards.is_empty() {
-                    bail!("{} names no stewards", entry.path().display());
-                }
                 let dir = entry
                     .path()
                     .parent()
@@ -93,6 +94,25 @@ impl StewMap {
             root: root.to_path_buf(),
             dirs,
         })
+    }
+
+    /// Resolve a user-supplied directory to a path relative to the project
+    /// root, checking that it exists and lies inside the project.
+    pub fn resolve_dir(&self, dir: &Path) -> Result<PathBuf> {
+        let abs = dir
+            .canonicalize()
+            .with_context(|| format!("cannot resolve {}", dir.display()))?;
+        if !abs.is_dir() {
+            bail!("{} is not a directory", dir.display());
+        }
+        let rel = abs.strip_prefix(&self.root).map_err(|_| {
+            anyhow::anyhow!(
+                "{} is outside the project root {}",
+                dir.display(),
+                self.root.display()
+            )
+        })?;
+        Ok(rel.to_path_buf())
     }
 
     /// The directory (relative to the root) whose `.stew` governs `rel`:
