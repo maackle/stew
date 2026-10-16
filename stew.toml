@@ -1,0 +1,4 @@
+# stew project manifest.
+#
+# Its presence marks the project root for the `stew` tool. There are no
+# settings yet; this file is a placeholder for future configuration.
