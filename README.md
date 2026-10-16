@@ -17,6 +17,10 @@ A stewardship linter. `.stew` files scattered through a project define who
 - An *empty* `.stew` file (no stewards, only blanks/comments) is not the same
   as a missing one: it says nobody stewards that directory or anything below
   it, instead of inheriting from the nearest `.stew` above.
+- Every command walks the tree respecting `.gitignore`. A `.stewignore` file,
+  in gitignore syntax, excludes further paths from `stew`'s view (lockfiles,
+  say). Like `.gitignore`, it may appear in any directory and applies to that
+  directory's subtree.
 
 ## Commands
 
@@ -35,9 +39,11 @@ path label, so if `./x/.stew` names A and `./x/y/z/.stew` names B:
 ### `stew stats`
 
 Lines of code owned per steward and each steward's share of the project
-total. Walks the tree respecting `.gitignore`, skips binary files and the
-`.stew`/`stew.toml` metadata files themselves. When a directory names
-multiple stewards, its lines count fully toward each of them.
+total. Walks the tree respecting `.gitignore` and `.stewignore`, skips
+binary files and the `.stew`/`.stewignore`/`stew.toml` metadata files
+themselves. When a directory names multiple stewards, its lines count fully
+toward each of them. After the total, it reports how many lines `.stewignore`
+left out.
 
 ### `stew stewards`
 
@@ -47,7 +53,8 @@ alphabetical order.
 ### `stew unclaimed [DIR]`
 
 Lists every unclaimed subtree at or below `DIR` (the current directory by
-default), as paths relative to the project root, one per line. A directory
+default), as paths relative to the project root, one per line, each with
+the total lines of text under it (counted as in `stew stats`). A directory
 is an unclaimed subtree when nothing in it is claimed: no `.stew` governs it
 (or the governing one is empty), and no `.stew` at or below it names anyone.
 Only the top of each unclaimed subtree is listed, not the directories inside

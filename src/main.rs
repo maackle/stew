@@ -4,7 +4,7 @@ mod model;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use model::{build_tree, Node, StewMap, Steward};
+use model::{build_tree, Ignores, Node, StewMap, Steward};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::Read;
@@ -29,7 +29,11 @@ struct Cli {
 enum Command {
     /// Show the tree of stewardship transitions
     Tree,
-    /// Show lines owned per steward, and each steward's share of the total
+    /// Show lines owned per steward, and each steward's share of the total.
+    ///
+    /// Files ignored by .gitignore or .stewignore are not counted.
+    ///
+    /// Note that shared lines count fully for each steward listed, so percentages can sum to more than 100%.
     Stats,
     /// Read a unified diff from stdin and attribute it to stewards
     Diff,
@@ -143,7 +147,7 @@ fn print_children(node: &Node, indent: &str) {
 
 // --------------------------------------------------------------- stats ----
 
-const UNOWNED: &str = "(UNCLAIMED)";
+const UNOWNED: &str = "(unclaimed)";
 
 fn stats(map: &StewMap) -> Result<()> {
     let mut lines_by_steward: BTreeMap<String, usize> = BTreeMap::new();
@@ -156,7 +160,7 @@ fn stats(map: &StewMap) -> Result<()> {
             continue;
         }
         let name = entry.file_name();
-        if name == model::STEW_FILE || name == model::ROOT_MANIFEST {
+        if name == model::STEW_FILE || name == model::ROOT_MANIFEST || name == model::STEW_IGNORE {
             continue;
         }
         let Some(lines) = count_lines(entry.path())? else {
@@ -182,7 +186,7 @@ fn stats(map: &StewMap) -> Result<()> {
     let width = rows
         .iter()
         .map(|(s, _)| s.len())
-        .chain(["total".len()])
+        .chain(["ignored by .stewignore".len()])
         .max()
         .unwrap_or(5);
     for (steward, lines) in &rows {
@@ -193,15 +197,45 @@ fn stats(map: &StewMap) -> Result<()> {
         };
         println!("{steward:<width$}  {lines:>8}  {pct:>5.1}%");
     }
-    println!("{:<width$}  {total:>8}", "total");
-    if shared {
-        println!("note: some directories have multiple stewards; shared lines count fully for each, so percentages can sum to more than 100%");
-    }
+    println!("{:<width$}  {total:>8}", "TOTAL");
+    // // Lines .stewignore hid. (Lines hidden by .gitignore aren't reported:
+    // // counting them means reading every build artifact, which is slow.)
+    // let without_stewignore = count_lines_under_with(&map.root, Ignores::Git)?;
+    // println!(
+    //     "{:<width$}  {:>8}",
+    //     "ignored by .stewignore",
+    //     without_stewignore.saturating_sub(total)
+    // );
     Ok(())
 }
 
 /// Line count of a text file; `None` for binary files (NUL byte in the
 /// first 8 KiB).
+/// Total lines of all text files under `dir`, with the same rules as
+/// `stats`: ignore files respected, metadata and binary files skipped.
+fn count_lines_under(dir: &Path) -> Result<usize> {
+    count_lines_under_with(dir, Ignores::GitAndStew)
+}
+
+/// As `count_lines_under`, honouring only the given ignore files.
+fn count_lines_under_with(dir: &Path, ignores: Ignores) -> Result<usize> {
+    let mut total = 0;
+    for entry in model::walker_with(dir, ignores).build() {
+        let entry = entry?;
+        if !entry.file_type().is_some_and(|t| t.is_file()) {
+            continue;
+        }
+        let name = entry.file_name();
+        if name == model::STEW_FILE || name == model::ROOT_MANIFEST || name == model::STEW_IGNORE {
+            continue;
+        }
+        if let Some(lines) = count_lines(entry.path())? {
+            total += lines;
+        }
+    }
+    Ok(total)
+}
+
 fn count_lines(path: &Path) -> Result<Option<usize>> {
     let bytes = fs::read(path)?;
     let probe = &bytes[..bytes.len().min(8192)];
@@ -242,10 +276,12 @@ fn is_unclaimed_subtree(map: &StewMap, rel: &Path) -> bool {
 }
 
 /// Print every unclaimed subtree at or below `dir`, as paths relative to
-/// the project root, one per line. Only the top of each unclaimed subtree
-/// is listed; a directory inside one is not listed again.
+/// the project root with the total lines under each, one per line. Only the
+/// top of each unclaimed subtree is listed; a directory inside one is not
+/// listed again.
 fn unclaimed(map: &StewMap, dir: &Path) -> Result<()> {
     let start = map.resolve_dir(dir)?;
+    let mut rows: Vec<(String, usize)> = Vec::new();
     for entry in model::walker(&map.root.join(&start)).build() {
         let entry = entry?;
         if !entry.file_type().is_some_and(|t| t.is_dir()) {
@@ -255,14 +291,20 @@ fn unclaimed(map: &StewMap, dir: &Path) -> Result<()> {
         if !is_unclaimed_subtree(map, rel) {
             continue;
         }
-        let parent_listed = rel != start
-            && rel
-                .parent()
-                .is_some_and(|p| is_unclaimed_subtree(map, p));
+        let parent_listed =
+            rel != start && rel.parent().is_some_and(|p| is_unclaimed_subtree(map, p));
         if !parent_listed {
-            let shown = if rel.as_os_str().is_empty() { "." } else { rel.to_str().unwrap_or(".") };
-            println!("{shown}");
+            let shown = if rel.as_os_str().is_empty() {
+                "."
+            } else {
+                rel.to_str().unwrap_or(".")
+            };
+            rows.push((shown.to_string(), count_lines_under(entry.path())?));
         }
+    }
+    let width = rows.iter().map(|(p, _)| p.len()).max().unwrap_or(0);
+    for (path, lines) in &rows {
+        println!("{path:<width$}  {lines:>8}");
     }
     Ok(())
 }
