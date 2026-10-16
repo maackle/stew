@@ -43,7 +43,7 @@ enum Command {
     ///
     /// `stew add me DIR` adds the identity from git config
     /// (user.name <user.email>).
-    #[command(override_usage = "stew add [OPTIONS] <DIR> <STEWARD>\n       stew add [OPTIONS] me <DIR>")]
+    #[command(override_usage = "stew add [OPTIONS] <STEWARD> <DIR>\n       stew add [OPTIONS] me <DIR>")]
     Add {
         #[command(flatten)]
         target: edit::Target,
@@ -56,7 +56,7 @@ enum Command {
     /// (user.name <user.email>).
     #[command(
         alias = "rm",
-        override_usage = "stew remove [OPTIONS] <DIR> <STEWARD>\n       stew remove [OPTIONS] me <DIR>"
+        override_usage = "stew remove [OPTIONS] <STEWARD> <DIR>\n       stew remove [OPTIONS] me <DIR>"
     )]
     Remove {
         #[command(flatten)]

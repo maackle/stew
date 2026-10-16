@@ -22,12 +22,12 @@ pub struct Opts {
     pub quiet: bool,
 }
 
-/// The positional arguments of `add`/`remove`: either `DIR STEWARD`, or
+/// The positional arguments of `add`/`remove`: either `STEWARD DIR`, or
 /// `me DIR` to use the identity from git config.
 #[derive(Args, Debug)]
 pub struct Target {
-    /// Directory and steward identity (or `me` and a directory)
-    #[arg(required = true, num_args = 2, value_names = ["DIR", "STEWARD"], hide_possible_values = true)]
+    /// Steward identity and directory (or `me` and a directory)
+    #[arg(required = true, num_args = 2, value_names = ["STEWARD", "DIR"], hide_possible_values = true)]
     pub args: Vec<String>,
 }
 
@@ -39,7 +39,7 @@ impl Target {
         if a == "me" {
             Ok((PathBuf::from(b), git_identity(root)?))
         } else {
-            Ok((PathBuf::from(a), b.clone()))
+            Ok((PathBuf::from(b), a.clone()))
         }
     }
 }

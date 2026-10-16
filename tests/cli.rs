@@ -131,7 +131,7 @@ fn which_fails_when_nothing_governs() {
 fn add_creates_file_and_announces_parent_effect() {
     let dir = scratch();
     let sub = dir.path().join("x/y").display().to_string();
-    let out = run(dir.path(), &["add", &sub, "C <c@example.com>", "-y"], None);
+    let out = run(dir.path(), &["add", "C <c@example.com>", &sub, "-y"], None);
     assert!(out.contains("away from x/.stew"), "{out}");
     assert!(out.contains("- A <a@example.com>"), "{out}");
     assert!(out.contains("added C <c@example.com> to x/y/.stew"), "{out}");
@@ -145,12 +145,12 @@ fn add_creates_file_and_announces_parent_effect() {
 fn add_appends_and_ignores_duplicates() {
     let dir = scratch();
     let x = dir.path().join("x").display().to_string();
-    run(dir.path(), &["add", &x, "C <c@example.com>", "-y"], None);
+    run(dir.path(), &["add", "C <c@example.com>", &x, "-y"], None);
     assert_eq!(
         fs::read_to_string(dir.path().join("x/.stew")).unwrap(),
         "# owner\nA <a@example.com>\nC <c@example.com>\n"
     );
-    let out = run(dir.path(), &["add", &x, "A <a@example.com>", "-y"], None);
+    let out = run(dir.path(), &["add", "A <a@example.com>", &x, "-y"], None);
     assert!(out.contains("already a steward"), "{out}");
     assert_eq!(
         fs::read_to_string(dir.path().join("x/.stew")).unwrap(),
@@ -162,7 +162,7 @@ fn add_appends_and_ignores_duplicates() {
 fn add_quiet_suppresses_result_line() {
     let dir = scratch();
     let x = dir.path().join("x").display().to_string();
-    let out = run(dir.path(), &["add", &x, "C <c@example.com>", "-y", "-q"], None);
+    let out = run(dir.path(), &["add", "C <c@example.com>", &x, "-y", "-q"], None);
     assert!(!out.contains("added"), "{out}");
 }
 
@@ -170,12 +170,12 @@ fn add_quiet_suppresses_result_line() {
 fn add_prompt_can_be_declined() {
     let dir = scratch();
     let sub = dir.path().join("x/y").display().to_string();
-    let (ok, out) = try_run(dir.path(), &["add", &sub, "C <c@example.com>"], Some("n\n"));
+    let (ok, out) = try_run(dir.path(), &["add", "C <c@example.com>", &sub], Some("n\n"));
     assert!(!ok);
     assert!(out.contains("Proceed? [y/N]"), "{out}");
     assert!(!dir.path().join("x/y/.stew").exists());
 
-    let (ok, _) = try_run(dir.path(), &["add", &sub, "C <c@example.com>"], Some("y\n"));
+    let (ok, _) = try_run(dir.path(), &["add", "C <c@example.com>", &sub], Some("y\n"));
     assert!(ok);
     assert!(dir.path().join("x/y/.stew").exists());
 }
@@ -184,7 +184,7 @@ fn add_prompt_can_be_declined() {
 fn remove_last_steward_leaves_empty_file_meaning_unowned() {
     let dir = scratch();
     let z = dir.path().join("x/y/z").display().to_string();
-    let out = run(dir.path(), &["remove", &z, "B <b@example.com>", "-y"], None);
+    let out = run(dir.path(), &["remove", "B <b@example.com>", &z, "-y"], None);
     assert!(out.contains("leaves x/y/z/.stew empty"), "{out}");
     assert!(out.contains("fall back to x/.stew"), "{out}");
     assert_eq!(fs::read_to_string(dir.path().join("x/y/z/.stew")).unwrap(), "");
@@ -202,8 +202,8 @@ fn remove_last_steward_leaves_empty_file_meaning_unowned() {
 fn remove_keeps_comments_and_other_stewards() {
     let dir = scratch();
     let x = dir.path().join("x").display().to_string();
-    run(dir.path(), &["add", &x, "C <c@example.com>", "-y"], None);
-    run(dir.path(), &["remove", &x, "A <a@example.com>", "-y"], None);
+    run(dir.path(), &["add", "C <c@example.com>", &x, "-y"], None);
+    run(dir.path(), &["remove", "A <a@example.com>", &x, "-y"], None);
     assert_eq!(
         fs::read_to_string(dir.path().join("x/.stew")).unwrap(),
         "# owner\nC <c@example.com>\n"
@@ -242,7 +242,7 @@ fn me_uses_git_config_and_rm_is_an_alias() {
 fn remove_without_file_is_an_error() {
     let dir = scratch();
     let sub = dir.path().join("x/y").display().to_string();
-    let (ok, _) = try_run(dir.path(), &["remove", &sub, "A <a@example.com>", "-y"], None);
+    let (ok, _) = try_run(dir.path(), &["remove", "A <a@example.com>", &sub, "-y"], None);
     assert!(!ok);
 }
 

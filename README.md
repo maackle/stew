@@ -51,7 +51,7 @@ A <a@example.com>
 
 If no `.stew` file applies, it says so on stderr and exits non-zero.
 
-### `stew add DIR STEWARD` / `stew remove DIR STEWARD`
+### `stew add STEWARD DIR` / `stew remove STEWARD DIR`
 
 Add a steward to (or remove one from) `DIR/.stew`. `stew rm` is an alias for
 `stew remove`. `stew add me DIR` (likewise `stew remove me DIR`) uses the
@@ -64,7 +64,7 @@ removing the last steward leaves an empty file, which marks the subtree as
 unowned rather than handing it back to the parent:
 
 ```
-$ stew add x/y "C <c@example.com>"
+$ stew add "C <c@example.com>" x/y
 Create x/y/.stew naming C <c@example.com>.
 This takes stewardship of x/y (and everything below it) away from x/.stew, which names:
 - A <a@example.com>
