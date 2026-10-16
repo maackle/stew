@@ -59,6 +59,17 @@ fn tree_shows_transitions() {
 }
 
 #[test]
+fn stewards_lists_unique_sorted() {
+    let dir = scratch();
+    fs::write(dir.path().join("x/y/.stew"), "A <a@example.com>\nRoot <r@example.com>\n").unwrap();
+    let out = run(dir.path(), &["stewards"], None);
+    assert_eq!(
+        out,
+        "A <a@example.com>\nB <b@example.com>\nRoot <r@example.com>\n"
+    );
+}
+
+#[test]
 fn stats_counts_lines_per_steward() {
     let dir = scratch();
     let out = run(dir.path(), &["stats"], None);
@@ -115,6 +126,50 @@ fn which_prints_governing_stew_file() {
     let sub = dir.path().join("x/y").display().to_string();
     let out = run(dir.path(), &["which", &sub], None);
     assert_eq!(out.trim(), dir.path().join("x/.stew").display().to_string());
+}
+
+#[test]
+fn unclaimed_lists_every_unclaimed_subtree() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    fs::write(root.join("stew.toml"), "").unwrap();
+    // u is unclaimed (empty .stew) but holds a mix of claimed and
+    // unclaimed directories, so u itself is not an unclaimed subtree.
+    fs::create_dir_all(root.join("u/c1/inner/deeper")).unwrap();
+    fs::create_dir_all(root.join("u/c2")).unwrap();
+    fs::create_dir_all(root.join("u/n1")).unwrap();
+    fs::create_dir_all(root.join("u/n2/deep")).unwrap();
+    fs::create_dir_all(root.join("owned")).unwrap();
+    fs::write(root.join("u/.stew"), "").unwrap();
+    fs::write(root.join("u/c1/.stew"), "A <a@example.com>\n").unwrap();
+    fs::write(root.join("u/c2/.stew"), "B <b@example.com>\n").unwrap();
+    // An unclaimed directory inside a claimed one.
+    fs::write(root.join("u/c1/inner/.stew"), "# nobody\n").unwrap();
+    fs::write(root.join("owned/.stew"), "R <r@example.com>\n").unwrap();
+
+    let out = run(root, &["unclaimed", &root.display().to_string()], None);
+    let mut lines: Vec<&str> = out.lines().collect();
+    lines.sort();
+    assert_eq!(lines, vec!["u/c1/inner", "u/n1", "u/n2"]);
+
+    // Starting inside u gives the same set; starting inside an unclaimed
+    // subtree lists just the start.
+    let out = run(root, &["unclaimed", &root.join("u").display().to_string()], None);
+    let mut lines: Vec<&str> = out.lines().collect();
+    lines.sort();
+    assert_eq!(lines, vec!["u/c1/inner", "u/n1", "u/n2"]);
+    let out = run(root, &["unclaimed", &root.join("u/n2/deep").display().to_string()], None);
+    assert_eq!(out.trim(), "u/n2/deep");
+}
+
+#[test]
+fn unclaimed_with_no_root_stew_lists_root() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    fs::write(root.join("stew.toml"), "").unwrap();
+    fs::create_dir_all(root.join("a/b")).unwrap();
+    let out = run(root, &["unclaimed", &root.display().to_string()], None);
+    assert_eq!(out.trim(), ".");
 }
 
 #[test]
@@ -192,7 +247,7 @@ fn remove_last_steward_leaves_empty_file_meaning_unowned() {
     // The empty file is honoured: two.rs is now unowned, not A's.
     let out = run(dir.path(), &["stats"], None);
     let line = |s: &str| out.lines().find(|l| l.contains(s)).unwrap().to_string();
-    assert!(line("(unowned)").contains('3'), "{out}");
+    assert!(line("(UNCLAIMED)").contains('3'), "{out}");
     assert!(line("A <a@example.com>").contains('2'), "{out}");
     let out = run(dir.path(), &["tree"], None);
     assert!(out.contains("y/z — (no steward)"), "{out}");

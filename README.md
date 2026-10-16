@@ -39,6 +39,21 @@ total. Walks the tree respecting `.gitignore`, skips binary files and the
 `.stew`/`stew.toml` metadata files themselves. When a directory names
 multiple stewards, its lines count fully toward each of them.
 
+### `stew stewards`
+
+Lists every distinct steward named in any `.stew` file, one per line, in
+alphabetical order.
+
+### `stew unclaimed [DIR]`
+
+Lists every unclaimed subtree at or below `DIR` (the current directory by
+default), as paths relative to the project root, one per line. A directory
+is an unclaimed subtree when nothing in it is claimed: no `.stew` governs it
+(or the governing one is empty), and no `.stew` at or below it names anyone.
+Only the top of each unclaimed subtree is listed, not the directories inside
+it. A directory that is itself unowned but contains claimed directories is
+not listed; its unclaimed children are listed instead.
+
 ### `stew which [DIR]`
 
 Prints the path of the `.stew` file governing a directory (the current

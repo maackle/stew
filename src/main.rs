@@ -5,7 +5,7 @@ mod model;
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use model::{build_tree, Node, StewMap, Steward};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -33,6 +33,17 @@ enum Command {
     Stats,
     /// Read a unified diff from stdin and attribute it to stewards
     Diff,
+    /// List every steward named in any .stew file, alphabetically
+    Stewards,
+    /// List the unclaimed subtrees at or below a directory
+    ///
+    /// A directory is unclaimed when no `.stew` governs it, or the governing
+    /// `.stew` is empty. Only the top of each unclaimed subtree is listed.
+    Unclaimed {
+        /// Directory to start from
+        #[arg(default_value = ".")]
+        dir: PathBuf,
+    },
     /// Print the path of the .stew file governing a directory
     Which {
         /// Directory to look up
@@ -43,7 +54,9 @@ enum Command {
     ///
     /// `stew add me DIR` adds the identity from git config
     /// (user.name <user.email>).
-    #[command(override_usage = "stew add [OPTIONS] <STEWARD> <DIR>\n       stew add [OPTIONS] me <DIR>")]
+    #[command(
+        override_usage = "stew add [OPTIONS] <STEWARD> <DIR>\n       stew add [OPTIONS] me <DIR>"
+    )]
     Add {
         #[command(flatten)]
         target: edit::Target,
@@ -78,6 +91,8 @@ fn main() -> Result<()> {
         Command::Tree => tree(&map),
         Command::Stats => stats(&map)?,
         Command::Diff => cmd_diff(&map)?,
+        Command::Stewards => stewards(&map),
+        Command::Unclaimed { dir } => unclaimed(&map, &dir)?,
         Command::Which { dir } => which(&map, &dir)?,
         Command::Add { target, opts } => {
             let (dir, steward) = target.resolve(&map.root)?;
@@ -128,7 +143,7 @@ fn print_children(node: &Node, indent: &str) {
 
 // --------------------------------------------------------------- stats ----
 
-const UNOWNED: &str = "(unowned)";
+const UNOWNED: &str = "(UNCLAIMED)";
 
 fn stats(map: &StewMap) -> Result<()> {
     let mut lines_by_steward: BTreeMap<String, usize> = BTreeMap::new();
@@ -197,6 +212,59 @@ fn count_lines(path: &Path) -> Result<Option<usize>> {
     let newlines = bytes.iter().filter(|&&b| b == b'\n').count();
     let partial = usize::from(!bytes.is_empty() && *bytes.last().unwrap() != b'\n');
     Ok(Some(newlines + partial))
+}
+
+// ------------------------------------------------------------ stewards ----
+
+/// Print every distinct steward named in any `.stew` file, one per line,
+/// sorted alphabetically.
+fn stewards(map: &StewMap) {
+    let all: BTreeSet<&Steward> = map.dirs.values().flatten().collect();
+    for s in all {
+        println!("{s}");
+    }
+}
+
+// ----------------------------------------------------------- unclaimed ----
+
+/// A directory is an unclaimed subtree when nothing in it is claimed: no
+/// `.stew` governs it (or the governing one names nobody), and no `.stew`
+/// at or below it names anybody.
+fn is_unclaimed_subtree(map: &StewMap, rel: &Path) -> bool {
+    let governed = map
+        .governing_dir(rel)
+        .is_some_and(|d| !map.dirs[d].is_empty());
+    let claimed_below = map
+        .dirs
+        .iter()
+        .any(|(d, stewards)| d.starts_with(rel) && !stewards.is_empty());
+    !governed && !claimed_below
+}
+
+/// Print every unclaimed subtree at or below `dir`, as paths relative to
+/// the project root, one per line. Only the top of each unclaimed subtree
+/// is listed; a directory inside one is not listed again.
+fn unclaimed(map: &StewMap, dir: &Path) -> Result<()> {
+    let start = map.resolve_dir(dir)?;
+    for entry in model::walker(&map.root.join(&start)).build() {
+        let entry = entry?;
+        if !entry.file_type().is_some_and(|t| t.is_dir()) {
+            continue;
+        }
+        let rel = entry.path().strip_prefix(&map.root).unwrap();
+        if !is_unclaimed_subtree(map, rel) {
+            continue;
+        }
+        let parent_listed = rel != start
+            && rel
+                .parent()
+                .is_some_and(|p| is_unclaimed_subtree(map, p));
+        if !parent_listed {
+            let shown = if rel.as_os_str().is_empty() { "." } else { rel.to_str().unwrap_or(".") };
+            println!("{shown}");
+        }
+    }
+    Ok(())
 }
 
 // --------------------------------------------------------------- which ----
