@@ -2,6 +2,7 @@
 //! and building the tree of stewardship transitions.
 
 use anyhow::{bail, Context, Result};
+use ignore::gitignore::{Gitignore, GitignoreBuilder};
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -32,12 +33,49 @@ pub fn find_root(start: &Path) -> Result<PathBuf> {
     );
 }
 
+/// One entry of `[members]`.
+#[derive(Debug, Clone)]
+pub struct Member {
+    /// The git identities this member commits as, e.g.
+    /// `Jane Doe <jane@example.com>`.
+    pub names: Vec<String>,
+    /// Patterns, in `.gitignore` syntax relative to the project root, for
+    /// files this member stewards regardless of `.stew` files, as written.
+    pub overrides: Vec<String>,
+    /// `overrides`, compiled.
+    pub override_set: Gitignore,
+}
+
+impl Member {
+    pub fn new(names: Vec<String>, overrides: Vec<String>) -> Result<Self> {
+        let mut b = GitignoreBuilder::new("");
+        for pat in &overrides {
+            b.add_line(None, pat)
+                .with_context(|| format!("invalid override pattern {pat:?}"))?;
+        }
+        let override_set = b.build().context("invalid override patterns")?;
+        Ok(Member {
+            names,
+            overrides,
+            override_set,
+        })
+    }
+
+    /// Whether `rel` (a root-relative file path) is claimed by an override.
+    pub fn overrides_file(&self, rel: &str) -> bool {
+        !self.overrides.is_empty()
+            && self
+                .override_set
+                .matched_path_or_any_parents(Path::new(rel), false)
+                .is_ignore()
+    }
+}
+
 /// The contents of `stew.toml`.
 #[derive(Debug, Default, Clone)]
 pub struct Manifest {
-    /// Member keys (as written in `.stew` files) to the git identities
-    /// they stand for, e.g. `jane` → `["Jane Doe <jane@example.com>"]`.
-    pub members: BTreeMap<String, Vec<String>>,
+    /// Member keys (as written in `.stew` files) to their definitions.
+    pub members: BTreeMap<String, Member>,
 }
 
 impl Manifest {
@@ -45,9 +83,70 @@ impl Manifest {
     pub fn member_for_identity(&self, identity: &str) -> Option<&str> {
         self.members
             .iter()
-            .find(|(_, ids)| ids.iter().any(|i| i == identity))
+            .find(|(_, m)| m.names.iter().any(|i| i == identity))
             .map(|(k, _)| k.as_str())
     }
+
+    /// The members whose overrides claim `rel`, in key order. Empty when no
+    /// override applies and the `.stew` files decide.
+    pub fn overriders(&self, rel: &str) -> Vec<Steward> {
+        self.members
+            .iter()
+            .filter(|(_, m)| m.overrides_file(rel))
+            .map(|(k, _)| k.clone())
+            .collect()
+    }
+}
+
+/// A `[members]` value: a string, a list of strings, or a table with
+/// `name`/`names` and optionally `override`/`overrides`.
+fn parse_member(value: &toml::Value) -> Result<Member> {
+    match value {
+        toml::Value::Table(t) => {
+            for k in t.keys() {
+                if !matches!(k.as_str(), "name" | "names" | "override" | "overrides") {
+                    bail!("unknown field `{k}` (expected name/names, override/overrides)");
+                }
+            }
+            let names = one_or_many(t, "name", "names")?;
+            if names.is_empty() {
+                bail!("needs `name` or `names`");
+            }
+            let overrides = one_or_many(t, "override", "overrides")?;
+            Member::new(names, overrides)
+        }
+        _ => Member::new(strings(value, "value")?, Vec::new()),
+    }
+}
+
+/// Read `single` (a string) or `plural` (a list of strings) from `t`, but
+/// not both. Absent means empty.
+fn one_or_many(t: &toml::Table, single: &str, plural: &str) -> Result<Vec<String>> {
+    match (t.get(single), t.get(plural)) {
+        (Some(_), Some(_)) => bail!("give either `{single}` or `{plural}`, not both"),
+        (Some(v), None) => strings(v, single),
+        (None, Some(v)) => strings(v, plural),
+        (None, None) => Ok(Vec::new()),
+    }
+}
+
+/// A string or list of strings, all non-empty.
+fn strings(value: &toml::Value, what: &str) -> Result<Vec<String>> {
+    let out: Vec<String> = match value {
+        toml::Value::String(s) => vec![s.clone()],
+        toml::Value::Array(a) => a
+            .iter()
+            .map(|v| match v {
+                toml::Value::String(s) => Ok(s.clone()),
+                _ => bail!("`{what}`: every entry must be a string"),
+            })
+            .collect::<Result<_>>()?,
+        _ => bail!("`{what}` must be a string or a list of strings"),
+    };
+    if out.iter().any(|i| i.trim().is_empty()) {
+        bail!("`{what}`: entries must not be empty");
+    }
+    Ok(out)
 }
 
 /// A member key: alphanumeric characters and underscores only.
@@ -86,21 +185,9 @@ pub fn parse_manifest(text: &str) -> Result<Manifest> {
                 if !is_valid_member_key(key) {
                     bail!("member key {key:?} is not valid: use only letters, digits and `_`");
                 }
-                let ids: Vec<String> = match value {
-                    toml::Value::String(s) => vec![s.clone()],
-                    toml::Value::Array(a) => a
-                        .iter()
-                        .map(|v| match v {
-                            toml::Value::String(s) => Ok(s.clone()),
-                            _ => bail!("member {key}: every entry must be a string"),
-                        })
-                        .collect::<Result<_>>()?,
-                    _ => bail!("member {key}: value must be a string or a list of strings"),
-                };
-                if ids.iter().any(|i| i.trim().is_empty()) {
-                    bail!("member {key}: identities must not be empty");
-                }
-                members.insert(key.clone(), ids);
+                let member =
+                    parse_member(value).with_context(|| format!("member {key}"))?;
+                members.insert(key.clone(), member);
             }
         }
         Some(_) => bail!("`members` must be a table"),
@@ -211,10 +298,24 @@ impl StewMap {
         None
     }
 
-    /// The stewards owning a file path (relative to the root): those named
-    /// by the nearest `.stew` at or above its directory. `None` if no
-    /// `.stew` governs it.
-    pub fn stewards_of_file(&self, rel: &str) -> Option<&[Steward]> {
+    /// The stewards owning a file path (relative to the root): the members
+    /// whose overrides match it, or else those named by the nearest `.stew`
+    /// at or above its directory. `None` if neither applies.
+    pub fn stewards_of_file(&self, rel: &str) -> Option<Vec<Steward>> {
+        let overriders = self.manifest.overriders(rel);
+        if !overriders.is_empty() {
+            return Some(overriders);
+        }
+        self.stewards_by_stew(rel).map(<[Steward]>::to_vec)
+    }
+
+    /// Whether some member's override claims `rel`.
+    pub fn is_overridden(&self, rel: &str) -> bool {
+        self.manifest.members.values().any(|m| m.overrides_file(rel))
+    }
+
+    /// The stewards named for a file by `.stew` files alone.
+    fn stewards_by_stew(&self, rel: &str) -> Option<&[Steward]> {
         let p = Path::new(rel);
         let parent = p.parent().unwrap_or(Path::new(""));
         let mut dir = Some(parent);
@@ -320,12 +421,16 @@ mod tests {
     #[test]
     fn manifest_parses_members() {
         let m = parse_manifest(&format!(
-            "version = \"{}\"\n[members]\na = \"A <a@x>\"\nb_2 = [\"B <b@x>\", \"Bee <bee@x>\"]\n",
+            "version = \"{}\"\n[members]\na = \"A <a@x>\"\nb_2 = [\"B <b@x>\", \"Bee <bee@x>\"]\nc = {{ name = \"C <c@x>\", overrides = [\"*.lock\", \"docs/\"] }}\n",
             env!("CARGO_PKG_VERSION")
         ))
         .unwrap();
-        assert_eq!(m.members["a"], vec!["A <a@x>"]);
-        assert_eq!(m.members["b_2"], vec!["B <b@x>", "Bee <bee@x>"]);
+        assert_eq!(m.members["a"].names, vec!["A <a@x>"]);
+        assert_eq!(m.members["b_2"].names, vec!["B <b@x>", "Bee <bee@x>"]);
+        assert_eq!(m.members["c"].names, vec!["C <c@x>"]);
+        assert_eq!(m.overriders("Cargo.lock"), vec!["c"]);
+        assert_eq!(m.overriders("docs/a/b.md"), vec!["c"]);
+        assert!(m.overriders("src/main.rs").is_empty());
         assert_eq!(m.member_for_identity("Bee <bee@x>"), Some("b_2"));
         assert_eq!(m.member_for_identity("Nobody <n@x>"), None);
     }
@@ -335,6 +440,23 @@ mod tests {
         assert!(parse_manifest("").is_err());
         assert!(parse_manifest("version = \"0.0.0-nope\"").is_err());
         assert!(parse_manifest(&format!("version = \"{}\"", env!("CARGO_PKG_VERSION"))).is_ok());
+    }
+
+    #[test]
+    fn overrides_beat_stew_files() {
+        let mut map = StewMap::default();
+        map.manifest
+            .members
+            .insert("a".into(), Member::new(vec!["A <a@x>".into()], vec![]).unwrap());
+        map.manifest.members.insert(
+            "lock".into(),
+            Member::new(vec!["L <l@x>".into()], vec!["*.lock".into()]).unwrap(),
+        );
+        map.dirs.insert(PathBuf::from(""), vec!["a".into()]);
+        assert_eq!(map.stewards_of_file("x/f.rs").unwrap(), vec!["a"]);
+        assert_eq!(map.stewards_of_file("x/Cargo.lock").unwrap(), vec!["lock"]);
+        assert!(map.is_overridden("Cargo.lock"));
+        assert!(!map.is_overridden("f.rs"));
     }
 
     #[test]
@@ -348,7 +470,7 @@ mod tests {
     #[test]
     fn unknown_members_lists_keys_not_in_manifest() {
         let mut map = StewMap::default();
-        map.manifest.members.insert("a".into(), vec!["A <a@x>".into()]);
+        map.manifest.members.insert("a".into(), Member::new(vec!["A <a@x>".into()], vec![]).unwrap());
         map.dirs.insert(PathBuf::from(""), vec!["a".into(), "ghost".into()]);
         map.dirs.insert(PathBuf::from("x"), vec!["a".into()]);
         let bad = map.unknown_members();

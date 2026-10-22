@@ -14,12 +14,20 @@ A stewardship linter. `.stew` files scattered through a project define who
   [members]
   jane = "Jane Doe <jane@example.com>"
   bob = ["Bob <bob@example.com>", "Bob <bob@work.example>"]
+  ops = { name = "Ops <ops@example.com>", overrides = ["**/*.lock", "ci/**"] }
   ```
 
   `version` is required and must match the version of the `stew` binary.
   `[members]` maps member keys (letters, digits and `_`) to the git
-  identities they stand for, as they appear in commits: a single string or
-  a list of them.
+  identities they stand for, as they appear in commits. A value is either
+  the identities directly (a string or a list of strings) or a table with
+  `name`/`names` and, optionally, `override`/`overrides`: a pattern or list
+  of patterns in `.gitignore` syntax, relative to the project root (so
+  `*.lock` matches at any depth and `ci/` matches a top-level directory).
+  Files matching a member's overrides belong to that member alone, taking
+  them away from whoever the `.stew` files name; if several members'
+  overrides match, they share. `stew stats`, `stew unclaimed` and `stew
+  diff` honour overrides; `stew tree` only shows `.stew` files.
 - Any directory may contain a `.stew` file: one member key per line. Blank
   lines and `#` comments are ignored. Every command reports stewards by
   their keys.
@@ -59,9 +67,8 @@ path label, so if `./x/.stew` names A and `./x/y/z/.stew` names B:
 ### `stew stats`
 
 Lines of code owned per steward and each steward's share of the project
-total. Walks the tree respecting `.gitignore` and `.stewignore`, skips
-binary files and the `.stew`/`.stewignore`/`stew.toml` metadata files
-themselves. When a directory names multiple stewards, its lines count fully
+total. Walks the tree respecting `.gitignore` and `.stewignore` and skips
+binary files. When a directory names multiple stewards, its lines count fully
 toward each of them. After the total, it reports how many lines `.stewignore`
 left out.
 

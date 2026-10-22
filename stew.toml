@@ -4,7 +4,14 @@
 version = "0.1.0"
 
 # Member keys, as written in `.stew` files, and the git identities they
-# stand for (a string or a list of strings).
+# stand for: a string, a list of strings, or a table like
+#   { names = ["..."], overrides = ["*.lock"] }
+# whose override patterns (gitignore syntax) claim matching files for this
+# member alone, regardless of `.stew` files.
 [members]
-michael = "Michael Dougherty <maackle.d@gmail.com>"
-nobody = "Nobody <nobody@example.com>"
+michael = { names = [
+  "Michael Dougherty <maackle.d@gmail.com>",
+], overrides = [
+  ".stew",
+] }
+claude = ["Claude Fable 5 <noreply@anthropic.com>"]

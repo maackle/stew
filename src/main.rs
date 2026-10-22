@@ -184,10 +184,6 @@ fn stats(map: &StewMap) -> Result<()> {
         if !entry.file_type().is_some_and(|t| t.is_file()) {
             continue;
         }
-        let name = entry.file_name();
-        if name == model::STEW_FILE || name == model::ROOT_MANIFEST || name == model::STEW_IGNORE {
-            continue;
-        }
         let Some(lines) = count_lines(entry.path())? else {
             continue; // binary file
         };
@@ -197,7 +193,7 @@ fn stats(map: &StewMap) -> Result<()> {
             Some(stewards) if !stewards.is_empty() => {
                 shared |= stewards.len() > 1;
                 for s in stewards {
-                    *lines_by_steward.entry(s.clone()).or_default() += lines;
+                    *lines_by_steward.entry(s).or_default() += lines;
                 }
             }
             // No governing .stew, or an empty one: both mean unowned.
@@ -225,7 +221,7 @@ fn stats(map: &StewMap) -> Result<()> {
     println!("{:<width$}  {total:>8}", "TOTAL");
     // // Lines .stewignore hid. (Lines hidden by .gitignore aren't reported:
     // // counting them means reading every build artifact, which is slow.)
-    // let without_stewignore = count_lines_under_with(&map.root, Ignores::Git)?;
+    // let without_stewignore = count_lines_under_with(map, &map.root, Ignores::Git)?;
     // println!(
     //     "{:<width$}  {:>8}",
     //     "ignored by .stewignore",
@@ -237,21 +233,22 @@ fn stats(map: &StewMap) -> Result<()> {
 /// Line count of a text file; `None` for binary files (NUL byte in the
 /// first 8 KiB).
 /// Total lines of all text files under `dir`, with the same rules as
-/// `stats`: ignore files respected, metadata and binary files skipped.
-fn count_lines_under(dir: &Path) -> Result<usize> {
-    count_lines_under_with(dir, Ignores::GitAndStew)
+/// `stats`: ignore files respected, binary files skipped, and files
+/// claimed by a member's override not counted.
+fn count_lines_under(map: &StewMap, dir: &Path) -> Result<usize> {
+    count_lines_under_with(map, dir, Ignores::GitAndStew)
 }
 
 /// As `count_lines_under`, honouring only the given ignore files.
-fn count_lines_under_with(dir: &Path, ignores: Ignores) -> Result<usize> {
+fn count_lines_under_with(map: &StewMap, dir: &Path, ignores: Ignores) -> Result<usize> {
     let mut total = 0;
     for entry in model::walker_with(dir, ignores).build() {
         let entry = entry?;
         if !entry.file_type().is_some_and(|t| t.is_file()) {
             continue;
         }
-        let name = entry.file_name();
-        if name == model::STEW_FILE || name == model::ROOT_MANIFEST || name == model::STEW_IGNORE {
+        let rel = entry.path().strip_prefix(&map.root).unwrap();
+        if map.is_overridden(&rel.to_string_lossy()) {
             continue;
         }
         if let Some(lines) = count_lines(entry.path())? {
@@ -324,7 +321,7 @@ fn unclaimed(map: &StewMap, dir: &Path) -> Result<()> {
             } else {
                 rel.to_str().unwrap_or(".")
             };
-            rows.push((shown.to_string(), count_lines_under(entry.path())?));
+            rows.push((shown.to_string(), count_lines_under(map, entry.path())?));
         }
     }
     let width = rows.iter().map(|(p, _)| p.len()).max().unwrap_or(0);
@@ -368,7 +365,7 @@ fn cmd_diff(map: &StewMap) -> Result<()> {
     let mut groups: BTreeMap<String, Vec<&diff::FileDiff>> = BTreeMap::new();
     for f in &files {
         let key = match map.stewards_of_file(&f.path) {
-            Some(s) if !s.is_empty() => fmt_stewards(s),
+            Some(s) if !s.is_empty() => fmt_stewards(&s),
             _ => UNOWNED.to_string(),
         };
         groups.entry(key).or_default().push(f);

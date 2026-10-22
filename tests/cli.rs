@@ -107,13 +107,14 @@ fn stewignore_excludes_files_and_stats_reports_ignored_lines() {
     let out = run(root, &["stats"], None);
     let line = |s: &str| out.lines().find(|l| l.contains(s)).unwrap().to_string();
     let last = |l: String| l.split_whitespace().last().unwrap().to_string();
-    // Owned counts are unchanged by the ignored files (Root gains one line
-    // for .gitignore itself).
-    let count = |l: String| l.split_whitespace().nth(2).unwrap().to_string();
-    assert_eq!(count(line("b")), "3", "{out}");
-    assert_eq!(count(line("a")), "2", "{out}");
-    assert_eq!(count(line("root")), "2", "{out}");
-    assert_eq!(last(line("total")), "7", "{out}");
+    // Owned counts are unchanged by the ignored files. Metadata files count:
+    // b has two.rs 3 + .stew 1 + .stewignore 1; a has one.rs 2 + .stew 2;
+    // root has plain.txt, .gitignore, .stewignore, .stew and stew.toml (8).
+    let count = |l: String| l.split_whitespace().nth(1).unwrap().to_string();
+    assert_eq!(count(line("b")), "5", "{out}");
+    assert_eq!(count(line("a")), "4", "{out}");
+    assert_eq!(count(line("root")), "12", "{out}");
+    assert_eq!(last(line("TOTAL")), "21", "{out}");
     assert!(!out.contains(".gitignore"), "{out}");
     assert_eq!(last(line("ignored by .stewignore")), "7", "{out}");
 
@@ -133,12 +134,21 @@ fn stewignore_excludes_files_and_stats_reports_ignored_lines() {
 fn stats_counts_lines_per_steward() {
     let dir = scratch();
     let out = run(dir.path(), &["stats"], None);
-    // two.rs: 3 lines → B; one.rs: 2 lines → A; plain.txt: 1 line → Root.
-    let line = |s: &str| out.lines().find(|l| l.contains(s)).unwrap().to_string();
-    assert!(line("b").contains('3'), "{out}");
-    assert!(line("a").contains('2'), "{out}");
-    assert!(line("root").contains('1'), "{out}");
-    assert!(line("total").contains('6'), "{out}");
+    // two.rs 3 + .stew 1 → b; one.rs 2 + .stew 2 → a; plain.txt 1 +
+    // stew.toml 8 + .stew 1 → root.
+    let count = |s: &str| {
+        out.lines()
+            .find(|l| l.split_whitespace().next() == Some(s))
+            .unwrap_or_else(|| panic!("no row {s}: {out}"))
+            .split_whitespace()
+            .nth(1)
+            .unwrap()
+            .to_string()
+    };
+    assert_eq!(count("b"), "4", "{out}");
+    assert_eq!(count("a"), "4", "{out}");
+    assert_eq!(count("root"), "10", "{out}");
+    assert_eq!(count("TOTAL"), "18", "{out}");
 }
 
 #[test]
@@ -224,7 +234,7 @@ fn unclaimed_lists_every_unclaimed_subtree() {
     assert_eq!(
         lines,
         vec![
-            vec!["u/c1/inner", "1"],
+            vec!["u/c1/inner", "2"], // c.txt + the comment line in its .stew
             vec!["u/n1", "0"],
             vec!["u/n2", "5"]
         ]
@@ -567,4 +577,145 @@ fn me_matches_any_identity_of_a_member() {
     let (ok, _, err) = run_full(dir.path(), &["add", "me", &x, "-y"]);
     assert!(!ok);
     assert!(err.contains("Stranger <bee@example.com>"), "{err}");
+}
+
+#[test]
+fn overrides_attribute_matching_files_regardless_of_stew() {
+    let dir = scratch();
+    let root = dir.path();
+    write_manifest(
+        root,
+        "\
+version = \"0.1.0\"
+
+[members]
+root = \"Root <r@example.com>\"
+a = { names = [\"A <a@example.com>\"], override = \"*.rs\" }
+b = { name = \"B <b@example.com>\", overrides = [\"x/y/z/two.rs\"] }
+",
+    );
+    // stats: every .rs file is a's (one.rs 2 + two.rs 3); two.rs is also
+    // b's via its own override.
+    let out = run(root, &["stats"], None);
+    let count = |s: &str| {
+        out.lines()
+            .find(|l| l.split_whitespace().next() == Some(s))
+            .unwrap_or_else(|| panic!("no row {s}: {out}"))
+            .split_whitespace()
+            .nth(1)
+            .unwrap()
+            .to_string()
+    };
+    assert_eq!(count("a"), "7", "{out}"); // + x/.stew (2 lines) by .stew rules
+    assert_eq!(count("b"), "4", "{out}"); // + x/y/z/.stew (1 line)
+    assert_eq!(count("root"), "8", "{out}"); // plain.txt + stew.toml (6) + .stew
+
+    // diff: plain.txt is root's by .stew; two.rs is a's and b's by override.
+    let diff = "\
+--- a/x/y/z/two.rs
++++ b/x/y/z/two.rs
+@@ -1,1 +1,2 @@
+-1
++one
++uno
+--- a/plain.txt
++++ b/plain.txt
+@@ -1,1 +1,1 @@
+-hello
++goodbye
+";
+    let out = run(root, &["diff"], Some(diff));
+    assert!(out.contains("a, b  (+2 -1)"), "{out}");
+    assert!(out.contains("root  (+1 -1)"), "{out}");
+
+    // An override claims a file even in an explicitly unowned subtree, and
+    // such files do not count toward unclaimed totals (the empty .stew has
+    // no lines either).
+    fs::write(root.join("x/y/z/.stew"), "").unwrap();
+    fs::write(root.join("x/y/z/notes.txt"), "n\n").unwrap();
+    let out = run(root, &["unclaimed", &root.display().to_string()], None);
+    assert_eq!(
+        out.split_whitespace().collect::<Vec<_>>(),
+        vec!["x/y/z", "1"],
+        "{out}"
+    );
+
+    // tree is unaffected.
+    let out = run(root, &["tree"], None);
+    assert!(out.contains("x — a"), "{out}");
+}
+
+#[test]
+fn member_table_form_is_validated() {
+    let dir = scratch();
+    let root = dir.path();
+    for bad in [
+        "version = \"0.1.0\"\n[members]\na = { name = \"A <a@x>\", names = [\"A <a@x>\"] }\n",
+        "version = \"0.1.0\"\n[members]\na = { override = \"*.rs\" }\n",
+        "version = \"0.1.0\"\n[members]\na = { name = \"A <a@x>\", override = \"a[\" }\n",
+        "version = \"0.1.0\"\n[members]\na = { name = \"A <a@x>\", bogus = 1 }\n",
+        "version = \"0.1.0\"\n[members]\na = { name = \"A <a@x>\", override = 1 }\n",
+    ] {
+        write_manifest(root, bad);
+        let (ok, _, err) = run_full(root, &["check"]);
+        assert!(!ok, "accepted {bad:?}");
+        assert!(err.contains("stew.toml"), "{err}");
+    }
+    // `me` resolves through `names` in the table form too.
+    write_manifest(
+        root,
+        "version = \"0.1.0\"\n[members]\nroot = \"Root <r@example.com>\"\na = \"A <a@example.com>\"\nb = { names = [\"B <b@example.com>\", \"Me Myself <me@example.com>\"] }\n",
+    );
+    let git = |args: &[&str]| {
+        assert!(Command::new("git")
+            .arg("-C")
+            .arg(root)
+            .args(args)
+            .stdout(Stdio::null())
+            .status()
+            .unwrap()
+            .success());
+    };
+    git(&["init", "-q"]);
+    git(&["config", "user.name", "Me Myself"]);
+    git(&["config", "user.email", "me@example.com"]);
+    let x = root.join("x").display().to_string();
+    let out = run(root, &["add", "me", &x, "-y"], None);
+    assert!(out.contains("added b to x/.stew"), "{out}");
+}
+
+#[test]
+fn override_without_slash_matches_at_any_depth_and_displaces_stew_owners() {
+    let dir = scratch();
+    let root = dir.path();
+    write_manifest(
+        root,
+        "\
+version = \"0.1.0\"
+
+[members]
+root = \"Root <r@example.com>\"
+a = \"A <a@example.com>\"
+b = \"B <b@example.com>\"
+meta = { name = \"M <m@example.com>\", override = \".stew\" }
+",
+    );
+    // Every .stew file (root: 1 line, x: 2, x/y/z: 1) is meta's, and
+    // nobody else's; the other owners keep their code.
+    let out = run(root, &["stats"], None);
+    let count = |s: &str| {
+        out.lines()
+            .find(|l| l.split_whitespace().next() == Some(s))
+            .unwrap_or_else(|| panic!("no row {s}: {out}"))
+            .split_whitespace()
+            .nth(1)
+            .unwrap()
+            .to_string()
+    };
+    assert_eq!(count("meta"), "4", "{out}");
+    assert_eq!(count("a"), "2", "{out}");
+    assert_eq!(count("b"), "3", "{out}");
+    assert_eq!(count("root"), "8", "{out}"); // plain.txt + stew.toml
+    let out = run(root, &["diff"], Some("--- a/x/.stew\n+++ b/x/.stew\n@@ -1,1 +1,1 @@\n-a\n+b\n"));
+    assert!(out.starts_with("meta  (+1 -1)"), "{out}");
 }
