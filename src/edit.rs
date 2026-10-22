@@ -118,6 +118,28 @@ fn read_stew(path: &Path) -> Result<Option<String>> {
     }
 }
 
+/// The stewards a directory inherits when it has no `.stew` of its own:
+/// those of the governing `.stew` above, with that file's label for the
+/// prompts. `None` if nothing governs it.
+fn inherited<'a>(map: &'a StewMap, rel: &Path) -> Option<(String, &'a [Steward])> {
+    let owner = map.governing_dir(rel)?;
+    Some((stew_label(owner), &map.dirs[owner]))
+}
+
+/// Write `stewards` as a fresh `.stew` file.
+fn write_new(file: &Path, stewards: &[&str]) -> Result<()> {
+    let mut out = String::new();
+    for s in stewards {
+        out.push_str(s);
+        out.push('\n');
+    }
+    fs::write(file, out).with_context(|| format!("cannot write {}", file.display()))
+}
+
+/// Make `steward` a steward of `dir`. If `dir` has its own `.stew`, the
+/// steward is appended to it; otherwise a `.stew` is created naming the
+/// stewards `dir` currently inherits plus the new one, so nobody loses
+/// anything.
 pub fn add(map: &StewMap, dir: &Path, steward: &str, opts: &Opts) -> Result<()> {
     let steward = steward.trim();
     if !map.manifest.members.contains_key(steward) {
@@ -130,105 +152,119 @@ pub fn add(map: &StewMap, dir: &Path, steward: &str, opts: &Opts) -> Result<()> 
     let file = map.root.join(&rel).join(model::STEW_FILE);
     let shown = stew_label(&rel);
 
-    let existing = read_stew(&file)?;
-    match &existing {
-        Some(text) => {
-            let current = model::parse_stew(text);
-            if current.iter().any(|s| s == steward) {
+    if let Some(text) = read_stew(&file)? {
+        let current = model::parse_stew(&text);
+        if current.iter().any(|s| s == steward) {
+            if !opts.quiet {
+                println!("{steward} is already a steward in {shown}");
+            }
+            return Ok(());
+        }
+        println!("* Add {steward} to {shown}, which currently names:");
+        if current.is_empty() {
+            println!("- (nobody: {} is explicitly unowned)", label(&rel));
+        } else {
+            print_list(&current);
+        }
+        println!();
+        confirm(opts)?;
+
+        let mut out = text;
+        if !out.is_empty() && !out.ends_with('\n') {
+            out.push('\n');
+        }
+        out.push_str(steward);
+        out.push('\n');
+        fs::write(&file, out).with_context(|| format!("cannot write {}", file.display()))?;
+    } else {
+        let mut stewards: Vec<&str> = Vec::new();
+        match inherited(map, &rel) {
+            Some((from, current)) if current.iter().any(|s| s == steward) => {
                 if !opts.quiet {
-                    println!("{steward} is already a steward in {shown}");
+                    println!(
+                        "{steward} is already a steward of {} (via {from})",
+                        label(&rel)
+                    );
                 }
                 return Ok(());
             }
-            println!("* Add {steward} to {shown}, which currently names:");
-            if current.is_empty() {
-                println!("- (nobody: {} is explicitly unowned)", label(&rel));
-            } else {
-                print_list(&current);
+            Some((from, current)) if !current.is_empty() => {
+                println!("* {} currently inherits its stewards from {from}:", label(&rel));
+                print_list(current);
+                println!("* Create {shown} naming those plus {steward}. ({from} itself is unchanged.)");
+                stewards.extend(current.iter().map(String::as_str));
             }
+            Some((from, _)) => println!(
+                "* {} is currently explicitly unowned via {from}.\n* Create {shown} naming {steward}; it and everything below it will be {steward}'s.",
+                label(&rel)
+            ),
+            None => println!(
+                "* Nobody currently stewards {}.\n* Create {shown} naming {steward}; it and everything below it will be {steward}'s.",
+                label(&rel)
+            ),
         }
-        None => {
-            println!("* Create {shown} naming {steward}.");
-            match map.governing_dir(&rel) {
-                Some(owner) => {
-                    let owner_stewards = &map.dirs[owner];
-                    if owner_stewards.is_empty() {
-                        println!(
-                            "* {} is currently explicitly unowned via {}; it and everything below it will become {steward}'s.",
-                            label(&rel),
-                            stew_label(owner)
-                        );
-                    } else {
-                        println!(
-                            "* This takes stewardship of {} (and everything below it) away from {}, which names:",
-                            label(&rel),
-                            stew_label(owner)
-                        );
-                        print_list(owner_stewards);
-                    }
-                }
-                None => println!(
-                    "* Nobody currently stewards {}; it and everything below it will be stewarded by {steward}.",
-                    label(&rel)
-                ),
-            }
-        }
+        stewards.push(steward);
+        println!();
+        confirm(opts)?;
+        write_new(&file, &stewards)?;
     }
-    println!();
-    confirm(opts)?;
-
-    let mut out = existing.unwrap_or_default();
-    if !out.is_empty() && !out.ends_with('\n') {
-        out.push('\n');
-    }
-    out.push_str(steward);
-    out.push('\n');
-    fs::write(&file, out).with_context(|| format!("cannot write {}", file.display()))?;
     if !opts.quiet {
         println!("added {steward} to {shown}");
     }
     Ok(())
 }
 
+/// Stop `steward` stewarding `dir`. If `dir` has its own `.stew`, the
+/// steward's line is dropped from it; otherwise a `.stew` is created naming
+/// the stewards `dir` currently inherits minus this one, so the levels
+/// above are unaffected.
 pub fn remove(map: &StewMap, dir: &Path, steward: &str, opts: &Opts) -> Result<()> {
     let steward = steward.trim();
     let rel = map.resolve_dir(dir)?;
     let file = map.root.join(&rel).join(model::STEW_FILE);
     let shown = stew_label(&rel);
 
-    let Some(text) = read_stew(&file)? else {
-        match map.governing_dir(&rel) {
-            Some(owner) => bail!(
-                "no {shown}; {} is governed by {} (use `stew remove {} ...` to edit that)",
-                label(&rel),
-                stew_label(owner),
-                label(owner)
-            ),
-            None => bail!("no {shown}, and no .stew file governs {}", label(&rel)),
-        }
+    let existing = read_stew(&file)?;
+    let (current, from): (Vec<Steward>, Option<String>) = match &existing {
+        Some(text) => (model::parse_stew(text), None),
+        None => match inherited(map, &rel) {
+            Some((from, current)) => (current.to_vec(), Some(from)),
+            None => (Vec::new(), None),
+        },
     };
-    let current = model::parse_stew(&text);
     if !current.iter().any(|s| s == steward) {
         if !opts.quiet {
-            println!("{steward} is not a steward in {shown}");
+            println!("{steward} is not a steward of {}", label(&rel));
         }
         return Ok(());
     }
-    let remaining: Vec<&Steward> = current.iter().filter(|s| *s != steward).collect();
+    let remaining: Vec<&str> = current
+        .iter()
+        .map(String::as_str)
+        .filter(|s| *s != steward)
+        .collect();
 
-    println!("* Remove {steward} from {shown}.");
+    match &from {
+        Some(from) => {
+            println!("* {} currently inherits its stewards from {from}:", label(&rel));
+            print_list(&current);
+            println!("* Create {shown} naming those without {steward}. ({from} itself is unchanged.)");
+        }
+        None => println!("* Remove {steward} from {shown}."),
+    }
     if remaining.is_empty() {
         println!(
             "* This leaves {shown} empty: nobody will steward {} or anything below it.",
             label(&rel)
         );
         let fallback = rel.parent().and_then(|p| map.governing_dir(p));
-        match fallback {
-            Some(owner) => println!(
+        match (from.is_some(), fallback) {
+            (true, _) => {}
+            (false, Some(owner)) => println!(
                 "  (Delete the file instead to fall back to {}.)",
                 stew_label(owner)
             ),
-            None => println!("  (Deleting the file instead would have the same effect, since no parent .stew applies.)"),
+            (false, None) => println!("  (Deleting the file instead would have the same effect, since no parent .stew applies.)"),
         }
     } else {
         println!("* {shown} will then name:");
@@ -239,16 +275,21 @@ pub fn remove(map: &StewMap, dir: &Path, steward: &str, opts: &Opts) -> Result<(
     println!();
     confirm(opts)?;
 
-    // Drop only the matching lines, preserving comments and blank lines.
-    let mut out: String = text
-        .lines()
-        .filter(|l| l.trim() != steward)
-        .map(|l| format!("{l}\n"))
-        .collect();
-    if out.trim().is_empty() {
-        out.clear();
+    match existing {
+        Some(text) => {
+            // Drop only the matching lines, preserving comments and blanks.
+            let mut out: String = text
+                .lines()
+                .filter(|l| l.trim() != steward)
+                .map(|l| format!("{l}\n"))
+                .collect();
+            if out.trim().is_empty() {
+                out.clear();
+            }
+            fs::write(&file, out).with_context(|| format!("cannot write {}", file.display()))?;
+        }
+        None => write_new(&file, &remaining)?,
     }
-    fs::write(&file, out).with_context(|| format!("cannot write {}", file.display()))?;
     if !opts.quiet {
         println!("removed {steward} from {shown}");
     }

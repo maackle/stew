@@ -102,22 +102,27 @@ If no `.stew` file applies, it says so on stderr and exits non-zero.
 
 ### `stew add MEMBER DIR` / `stew remove MEMBER DIR`
 
-Add a member key to (or remove one from) `DIR/.stew`. `stew rm` is an alias
-for `stew remove`. `add` refuses keys not listed in `[members]`. `stew add me
-DIR` (likewise `stew remove me DIR`) looks up the identity from git config,
-`user.name <user.email>`, and uses the member whose identities include it.
-`add` creates the file if it doesn't exist; adding an existing member or
-removing an absent one is a no-op. Before making the change, both commands explain what it means for the
-tree and ask for confirmation. In particular, creating a new `.stew` takes
-the subtree away from the parent `.stew` that currently governs it, and
-removing the last steward leaves an empty file, which marks the subtree as
-unowned rather than handing it back to the parent:
+Make a member a steward of `DIR`, or stop them being one. These commands
+are about the stewards of that level of the tree, not about files: they
+make whatever change to `DIR/.stew` is needed and nothing else changes.
+If `DIR` has its own `.stew`, the member's line is appended to or dropped
+from it. If it doesn't, one is created naming the stewards `DIR` currently
+inherits from the nearest `.stew` above, plus or minus the member, so the
+levels above keep exactly what they had. Removing the last inherited
+steward leaves an empty `.stew`, marking the subtree as unowned.
+
+`stew rm` is an alias for `stew remove`. `add` refuses keys not listed in
+`[members]`. `stew add me DIR` (likewise `stew remove me DIR`) looks up the
+identity from git config, `user.name <user.email>`, and uses the member
+whose identities include it. Adding someone who already stewards `DIR`, or
+removing someone who doesn't, is a no-op. Before making the change, both
+commands explain what will happen and ask for confirmation:
 
 ```
 $ stew add c x/y
-Create x/y/.stew naming c.
-This takes stewardship of x/y (and everything below it) away from x/.stew, which names:
+* x/y currently inherits its stewards from x/.stew:
 - a
+* Create x/y/.stew naming those plus c. (x/.stew itself is unchanged.)
 
 Proceed? [y/N] y
 added c to x/y/.stew

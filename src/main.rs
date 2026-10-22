@@ -59,10 +59,11 @@ enum Command {
         #[arg(default_value = ".")]
         dir: PathBuf,
     },
-    /// Add a steward to DIR/.stew, creating the file if needed
+    /// Make a member a steward of DIR
     ///
-    /// `stew add me DIR` adds the identity from git config
-    /// (user.name <user.email>).
+    /// Appends to DIR/.stew, or creates it naming the stewards DIR
+    /// currently inherits plus the new one. `stew add me DIR` uses the
+    /// member matching the identity from git config.
     #[command(
         override_usage = "stew add [OPTIONS] <STEWARD> <DIR>\n       stew add [OPTIONS] me <DIR>"
     )]
@@ -72,10 +73,11 @@ enum Command {
         #[command(flatten)]
         opts: edit::Opts,
     },
-    /// Remove a steward from DIR/.stew (alias: rm)
+    /// Stop a member stewarding DIR (alias: rm)
     ///
-    /// `stew remove me DIR` removes the identity from git config
-    /// (user.name <user.email>).
+    /// Edits DIR/.stew, or creates it naming the stewards DIR currently
+    /// inherits minus this one. `stew remove me DIR` uses the member
+    /// matching the identity from git config.
     #[command(
         alias = "rm",
         override_usage = "stew remove [OPTIONS] <STEWARD> <DIR>\n       stew remove [OPTIONS] me <DIR>"

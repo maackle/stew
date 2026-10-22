@@ -285,18 +285,44 @@ fn which_fails_when_nothing_governs() {
 }
 
 #[test]
-fn add_creates_file_and_announces_parent_effect() {
+fn add_creates_file_carrying_inherited_stewards() {
     let dir = scratch();
     let sub = dir.path().join("x/y").display().to_string();
     let out = run(dir.path(), &["add", "c", &sub, "-y"], None);
-    assert!(out.contains("away from x/.stew"), "{out}");
+    assert!(out.contains("inherits"), "{out}");
+    assert!(out.contains("x/.stew"), "{out}");
     assert!(out.contains("- a"), "{out}");
-    assert!(
-        out.contains("added c to x/y/.stew"),
-        "{out}"
-    );
+    assert!(!out.contains("away from"), "{out}");
+    assert!(out.contains("added c to x/y/.stew"), "{out}");
+    // a keeps stewarding x/y; c joins.
     assert_eq!(
         fs::read_to_string(dir.path().join("x/y/.stew")).unwrap(),
+        "a\nc\n"
+    );
+    let out = run(dir.path(), &["tree"], None);
+    assert!(out.contains("y — a, c"), "{out}");
+}
+
+#[test]
+fn add_inherited_steward_is_a_noop() {
+    let dir = scratch();
+    let sub = dir.path().join("x/y").display().to_string();
+    let out = run(dir.path(), &["add", "a", &sub, "-y"], None);
+    assert!(out.contains("already a steward"), "{out}");
+    assert!(out.contains("x/.stew"), "{out}");
+    assert!(!dir.path().join("x/y/.stew").exists());
+}
+
+#[test]
+fn add_where_nothing_governs_creates_file_with_just_the_member() {
+    let dir = scratch();
+    fs::remove_file(dir.path().join(".stew")).unwrap();
+    fs::create_dir_all(dir.path().join("free")).unwrap();
+    let sub = dir.path().join("free").display().to_string();
+    let out = run(dir.path(), &["add", "c", &sub, "-y"], None);
+    assert!(out.contains("Nobody currently stewards free"), "{out}");
+    assert_eq!(
+        fs::read_to_string(dir.path().join("free/.stew")).unwrap(),
         "c\n"
     );
 }
@@ -417,15 +443,49 @@ fn me_uses_git_config_and_rm_is_an_alias() {
 }
 
 #[test]
-fn remove_without_file_is_an_error() {
+fn remove_without_file_creates_one_without_the_member() {
+    let dir = scratch();
+    let root = dir.path();
+    fs::write(root.join("x/.stew"), "a\nc\n").unwrap();
+    let sub = root.join("x/y").display().to_string();
+    let out = run(root, &["remove", "a", &sub, "-y"], None);
+    assert!(out.contains("inherits"), "{out}");
+    assert!(out.contains("x/.stew"), "{out}");
+    assert!(out.contains("removed a from x/y/.stew"), "{out}");
+    assert_eq!(fs::read_to_string(root.join("x/y/.stew")).unwrap(), "c\n");
+    // x itself still has both.
+    assert_eq!(fs::read_to_string(root.join("x/.stew")).unwrap(), "a\nc\n");
+}
+
+#[test]
+fn remove_last_inherited_steward_creates_empty_file() {
     let dir = scratch();
     let sub = dir.path().join("x/y").display().to_string();
-    let (ok, _) = try_run(
-        dir.path(),
-        &["remove", "a", &sub, "-y"],
-        None,
+    let out = run(dir.path(), &["remove", "a", &sub, "-y"], None);
+    assert!(out.contains("nobody will steward x/y"), "{out}");
+    assert_eq!(
+        fs::read_to_string(dir.path().join("x/y/.stew")).unwrap(),
+        ""
     );
-    assert!(!ok);
+    let out = run(dir.path(), &["tree"], None);
+    assert!(out.contains("y — (no steward)"), "{out}");
+}
+
+#[test]
+fn remove_non_steward_without_file_is_a_noop() {
+    let dir = scratch();
+    let sub = dir.path().join("x/y").display().to_string();
+    let out = run(dir.path(), &["remove", "c", &sub, "-y"], None);
+    assert!(out.contains("not a steward"), "{out}");
+    assert!(!dir.path().join("x/y/.stew").exists());
+
+    // Nothing governs at all: also a no-op, no file created.
+    fs::remove_file(dir.path().join(".stew")).unwrap();
+    fs::create_dir_all(dir.path().join("free")).unwrap();
+    let sub = dir.path().join("free").display().to_string();
+    let out = run(dir.path(), &["remove", "c", &sub, "-y"], None);
+    assert!(out.contains("not a steward"), "{out}");
+    assert!(!dir.path().join("free/.stew").exists());
 }
 
 #[test]
