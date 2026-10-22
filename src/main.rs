@@ -39,6 +39,8 @@ enum Command {
     /// Files ignored by .gitignore or .stewignore are not counted.
     ///
     /// Note that shared lines count fully for each steward listed, so percentages can sum to more than 100%.
+    ///
+    /// An OVERLAP table follows, showing how many lines are covered by 0, 1, 2, ... stewards.
     Stats,
     /// Read a unified diff from stdin and attribute it to stewards
     Diff,
@@ -179,7 +181,8 @@ const UNOWNED: &str = "(unclaimed)";
 fn stats(map: &StewMap) -> Result<()> {
     let mut lines_by_steward: BTreeMap<String, usize> = BTreeMap::new();
     let mut total = 0usize;
-    let mut shared = false;
+    // Lines keyed by how many stewards cover them (0 = unclaimed).
+    let mut lines_by_count: BTreeMap<usize, usize> = BTreeMap::new();
 
     for entry in model::walker(&map.root).build() {
         let entry = entry?;
@@ -193,29 +196,54 @@ fn stats(map: &StewMap) -> Result<()> {
         let rel = entry.path().strip_prefix(&map.root).unwrap();
         match map.stewards_of_file(&rel.to_string_lossy()) {
             Some(stewards) if !stewards.is_empty() => {
-                shared |= stewards.len() > 1;
+                *lines_by_count.entry(stewards.len()).or_default() += lines;
                 for s in stewards {
                     *lines_by_steward.entry(s).or_default() += lines;
                 }
             }
             // No governing .stew, or an empty one: both mean unowned.
-            _ => *lines_by_steward.entry(UNOWNED.to_string()).or_default() += lines,
+            _ => {
+                *lines_by_count.entry(0).or_default() += lines;
+                *lines_by_steward.entry(UNOWNED.to_string()).or_default() += lines;
+            }
         }
     }
+
+    let pct = |lines: usize| {
+        if total == 0 {
+            0.0
+        } else {
+            100.0 * lines as f64 / total as f64
+        }
+    };
 
     let mut rows: Vec<(&String, &usize)> = lines_by_steward.iter().collect();
     rows.sort_by(|a, b| b.1.cmp(a.1).then(a.0.cmp(b.0)));
 
-    let width = rows.iter().map(|(s, _)| s.len()).max().unwrap_or(5);
+    // Column width fits the longest name and both tables' headings.
+    let width = rows
+        .iter()
+        .map(|(s, _)| s.len())
+        .chain(["STEWARD".len(), "OVERLAP".len()])
+        .max()
+        .unwrap();
+
+    println!("total lines: {total}");
+    println!();
+    println!("{:<width$}  {:>8}  {:>6}", "STEWARD", "LINES", "PERCENT");
     for (steward, lines) in &rows {
-        let pct = if total == 0 {
-            0.0
-        } else {
-            100.0 * **lines as f64 / total as f64
-        };
-        println!("{steward:<width$}  {lines:>8}  {pct:>5.1}%");
+        println!("{steward:<width$}  {lines:>8}  {:>5.1}%", pct(**lines));
     }
-    println!("{:<width$}  {total:>8}", "TOTAL");
+
+    // Overlap: how much of the code is covered by 0, 1, 2, ... stewards.
+    // Every count from 0 up to the maximum is listed, so gaps show as 0.
+    println!();
+    println!("{:<width$}  {:>8}  {:>6}", "OVERLAP", "LINES", "PERCENT");
+    let max_count = lines_by_count.keys().last().copied().unwrap_or(0);
+    for n in 0..=max_count {
+        let lines = lines_by_count.get(&n).copied().unwrap_or(0);
+        println!("{n:<width$}  {lines:>8}  {:>5.1}%", pct(lines));
+    }
     Ok(())
 }
 

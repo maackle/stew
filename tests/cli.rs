@@ -105,8 +105,12 @@ fn stewignore_excludes_files_from_stats_and_unclaimed() {
     fs::write(root.join("x/y/z/skip.rs"), "s1\ns2\n").unwrap();
 
     let out = run(root, &["stats"], None);
-    let line = |s: &str| out.lines().find(|l| l.contains(s)).unwrap().to_string();
-    let last = |l: String| l.split_whitespace().last().unwrap().to_string();
+    let line = |s: &str| {
+        out.lines()
+            .find(|l| l.split_whitespace().next() == Some(s))
+            .unwrap_or_else(|| panic!("no row {s}: {out}"))
+            .to_string()
+    };
     // Owned counts are unchanged by the ignored files. Metadata files count:
     // b has two.rs 3 + .stew 1 + .stewignore 1; a has one.rs 2 + .stew 2;
     // root has plain.txt, .gitignore, .stewignore, .stew and stew.toml (8).
@@ -114,7 +118,7 @@ fn stewignore_excludes_files_from_stats_and_unclaimed() {
     assert_eq!(count(line("b")), "5", "{out}");
     assert_eq!(count(line("a")), "4", "{out}");
     assert_eq!(count(line("root")), "12", "{out}");
-    assert_eq!(last(line("TOTAL")), "21", "{out}");
+    assert!(out.contains("total lines: 21"), "{out}");
     assert!(!out.contains(".gitignore"), "{out}");
 
     // unclaimed also respects .stewignore.
@@ -147,7 +151,34 @@ fn stats_counts_lines_per_steward() {
     assert_eq!(count("b"), "4", "{out}");
     assert_eq!(count("a"), "4", "{out}");
     assert_eq!(count("root"), "10", "{out}");
-    assert_eq!(count("TOTAL"), "18", "{out}");
+    assert!(out.contains("total lines: 18"), "{out}");
+}
+
+#[test]
+fn stats_shows_redundancy_histogram() {
+    let dir = scratch();
+    let root = dir.path();
+    // Make z shared by b and c (two.rs 3 + .stew 2 = 5 lines, 2 stewards),
+    // and add an unclaimed dir (1 line file + empty .stew = 1 line, 0 stewards).
+    fs::write(root.join("x/y/z/.stew"), "b\nc\n").unwrap();
+    fs::create_dir_all(root.join("free")).unwrap();
+    fs::write(root.join("free/.stew"), "").unwrap();
+    fs::write(root.join("free/a.txt"), "1\n").unwrap();
+    // Total 20: 0 stewards → 1, 1 steward → 14, 2 stewards → 5.
+    let out = run(root, &["stats"], None);
+    let section = out.split("OVERLAP").nth(1).unwrap_or_else(|| panic!("{out}"));
+    let row = |n: &str| {
+        section
+            .lines()
+            .find(|l| l.split_whitespace().next() == Some(n))
+            .unwrap_or_else(|| panic!("no redundancy row {n}: {out}"))
+            .split_whitespace()
+            .map(str::to_string)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(row("0")[1..], ["1", "5.0%"], "{out}");
+    assert_eq!(row("1")[1..], ["14", "70.0%"], "{out}");
+    assert_eq!(row("2")[1..], ["5", "25.0%"], "{out}");
 }
 
 #[test]
