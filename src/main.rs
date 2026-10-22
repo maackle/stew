@@ -41,7 +41,12 @@ enum Command {
     /// Note that shared lines count fully for each steward listed, so percentages can sum to more than 100%.
     ///
     /// An OVERLAP table follows, showing how many lines are covered by 0, 1, 2, ... stewards.
-    Stats,
+    ///
+    /// The first line of output is the absolute path of the directory counted.
+    Stats {
+        /// Directory to count (defaults to the project root)
+        dir: Option<PathBuf>,
+    },
     /// Read a unified diff from stdin and attribute it to stewards
     Diff,
     /// List every steward named in any .stew file, alphabetically
@@ -106,7 +111,7 @@ fn main() -> Result<()> {
     match cli.command {
         Command::Check => {}
         Command::Tree => tree(&map),
-        Command::Stats => stats(&map)?,
+        Command::Stats { dir } => stats(&map, dir.as_deref())?,
         Command::Diff => cmd_diff(&map)?,
         Command::Stewards => stewards(&map),
         Command::Unclaimed { dir } => unclaimed(&map, &dir)?,
@@ -178,13 +183,21 @@ fn print_children(node: &Node, indent: &str) {
 
 const UNOWNED: &str = "(unclaimed)";
 
-fn stats(map: &StewMap) -> Result<()> {
+/// Lines per steward, and per number of stewards, of the files under `dir`
+/// (the project root if `None`).
+fn stats(map: &StewMap, dir: Option<&Path>) -> Result<()> {
+    // `resolve_dir` gives "" for the root itself; joining that would add a
+    // trailing slash to the printed path.
+    let start = match dir.map(|d| map.resolve_dir(d)).transpose()? {
+        Some(rel) if !rel.as_os_str().is_empty() => map.root.join(rel),
+        _ => map.root.clone(),
+    };
     let mut lines_by_steward: BTreeMap<String, usize> = BTreeMap::new();
     let mut total = 0usize;
     // Lines keyed by how many stewards cover them (0 = unclaimed).
     let mut lines_by_count: BTreeMap<usize, usize> = BTreeMap::new();
 
-    for entry in model::walker(&map.root).build() {
+    for entry in model::walker(&start).build() {
         let entry = entry?;
         if !entry.file_type().is_some_and(|t| t.is_file()) {
             continue;
@@ -228,6 +241,7 @@ fn stats(map: &StewMap) -> Result<()> {
         .max()
         .unwrap();
 
+    println!("{}", start.display());
     println!("total lines: {total}");
     println!();
     println!("{:<width$}  {:>8}  {:>6}", "STEWARD", "LINES", "PERCENT");

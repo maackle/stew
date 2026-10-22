@@ -64,10 +64,11 @@ path label, so if `./x/.stew` names A and `./x/y/z/.stew` names B:
     └── y/z — b
 ```
 
-### `stew stats`
+### `stew stats [DIR]`
 
-Lines of code owned per steward and each steward's share of the project
-total. Walks the tree respecting `.gitignore` and `.stewignore` and skips
+Lines of code owned per steward and each steward's share of the total under
+`DIR` (the project root by default), whose absolute path is printed as the
+first line. Walks the tree respecting `.gitignore` and `.stewignore` and skips
 binary files. When a directory names multiple stewards, its lines count fully
 toward each of them.
 

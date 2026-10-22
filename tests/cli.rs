@@ -155,6 +155,23 @@ fn stats_counts_lines_per_steward() {
 }
 
 #[test]
+fn stats_prints_dir_and_limits_to_it() {
+    let dir = scratch();
+    let root = dir.path().canonicalize().unwrap();
+    // Default: the project root, printed absolute on the first line.
+    let out = run(&root, &["stats"], None);
+    assert_eq!(out.lines().next(), Some(root.to_str().unwrap()), "{out}");
+
+    // A subdirectory counts only what is under it: one.rs 2 + .stew 2 → a;
+    // two.rs 3 + .stew 1 → b.
+    let x = root.join("x");
+    let out = run(&root, &["stats", x.to_str().unwrap()], None);
+    assert_eq!(out.lines().next(), Some(x.to_str().unwrap()), "{out}");
+    assert!(out.contains("total lines: 8"), "{out}");
+    assert!(!out.lines().any(|l| l.starts_with("root ")), "{out}");
+}
+
+#[test]
 fn stats_shows_redundancy_histogram() {
     let dir = scratch();
     let root = dir.path();
