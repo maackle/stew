@@ -5,12 +5,24 @@ A stewardship linter. `.stew` files scattered through a project define who
 
 ## The model
 
-- The project root is the directory containing `stew.toml` (currently a
-  placeholder with no settings; `stew` searches upward from the current
-  directory to find it, or takes `--root`).
-- Any directory may contain a `.stew` file: one git identifier per line, as
-  it would appear in a commit (`Jane Doe <jane@example.com>`). Blank lines
-  and `#` comments are ignored.
+- The project root is the directory containing `stew.toml` (`stew` searches
+  upward from the current directory to find it, or takes `--root`):
+
+  ```toml
+  version = "0.1.0"
+
+  [members]
+  jane = "Jane Doe <jane@example.com>"
+  bob = ["Bob <bob@example.com>", "Bob <bob@work.example>"]
+  ```
+
+  `version` is required and must match the version of the `stew` binary.
+  `[members]` maps member keys (letters, digits and `_`) to the git
+  identities they stand for, as they appear in commits: a single string or
+  a list of them.
+- Any directory may contain a `.stew` file: one member key per line. Blank
+  lines and `#` comments are ignored. Every command reports stewards by
+  their keys.
 - The stewards named in a `.stew` file own that directory's subtree, down to
   (but not including) any deeper directory with its own `.stew` file.
 - Files above the shallowest `.stew` files are unowned.
@@ -24,6 +36,14 @@ A stewardship linter. `.stew` files scattered through a project define who
 
 ## Commands
 
+### `stew check`
+
+Checks that every `.stew` file names only keys listed under `[members]` in
+`stew.toml`. Each offending key is reported on stderr as
+`path/.stew: unknown member "key"`, and the exit status is non-zero. Prints
+nothing when all is well. Every other command runs this check first and
+refuses to proceed if it fails.
+
 ### `stew tree`
 
 Shows the tree of stewardship *transitions*, in the style of `cargo tree`.
@@ -31,9 +51,9 @@ Directories where stewardship doesn't change hands are collapsed into the
 path label, so if `./x/.stew` names A and `./x/y/z/.stew` names B:
 
 ```
-. — Root Steward <root@example.com>
-└── x — A <a@example.com>
-    └── y/z — B <b@example.com>
+. — root
+└── x — a
+    └── y/z — b
 ```
 
 ### `stew stats`
@@ -47,8 +67,8 @@ left out.
 
 ### `stew stewards`
 
-Lists every distinct steward named in any `.stew` file, one per line, in
-alphabetical order.
+Lists every distinct member key named in any `.stew` file, one per line,
+in alphabetical order.
 
 ### `stew unclaimed [DIR]`
 
@@ -68,31 +88,32 @@ directory by default), and nothing else, so it can be piped:
 
 ```
 $ cat $(stew which x/y)
-A <a@example.com>
+a
 ```
 
 If no `.stew` file applies, it says so on stderr and exits non-zero.
 
-### `stew add STEWARD DIR` / `stew remove STEWARD DIR`
+### `stew add MEMBER DIR` / `stew remove MEMBER DIR`
 
-Add a steward to (or remove one from) `DIR/.stew`. `stew rm` is an alias for
-`stew remove`. `stew add me DIR` (likewise `stew remove me DIR`) uses the
-identity from git config, `user.name <user.email>`. `add` creates the file if
-it doesn't exist; adding an existing steward or removing an absent one is a
-no-op. Before making the change, both commands explain what it means for the
+Add a member key to (or remove one from) `DIR/.stew`. `stew rm` is an alias
+for `stew remove`. `add` refuses keys not listed in `[members]`. `stew add me
+DIR` (likewise `stew remove me DIR`) looks up the identity from git config,
+`user.name <user.email>`, and uses the member whose identities include it.
+`add` creates the file if it doesn't exist; adding an existing member or
+removing an absent one is a no-op. Before making the change, both commands explain what it means for the
 tree and ask for confirmation. In particular, creating a new `.stew` takes
 the subtree away from the parent `.stew` that currently governs it, and
 removing the last steward leaves an empty file, which marks the subtree as
 unowned rather than handing it back to the parent:
 
 ```
-$ stew add "C <c@example.com>" x/y
-Create x/y/.stew naming C <c@example.com>.
+$ stew add c x/y
+Create x/y/.stew naming c.
 This takes stewardship of x/y (and everything below it) away from x/.stew, which names:
-- A <a@example.com>
+- a
 
 Proceed? [y/N] y
-added C <c@example.com> to x/y/.stew
+added c to x/y/.stew
 ```
 
 Flags: `-y`/`--yes` skips the prompt; `-q`/`--quiet` suppresses the

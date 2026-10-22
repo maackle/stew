@@ -1,4 +1,10 @@
-# stew project manifest.
-#
-# Its presence marks the project root for the `stew` tool. There are no
-# settings yet; this file is a placeholder for future configuration.
+# stew project manifest. Its presence marks the project root.
+
+# Must match the version of the `stew` binary.
+version = "0.1.0"
+
+# Member keys, as written in `.stew` files, and the git identities they
+# stand for (a string or a list of strings).
+[members]
+michael = "Michael Dougherty <maackle.d@gmail.com>"
+nobody = "Nobody <nobody@example.com>"

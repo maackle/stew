@@ -9,21 +9,32 @@ fn stew() -> Command {
     Command::new(env!("CARGO_BIN_EXE_stew"))
 }
 
+const MANIFEST: &str = "\
+version = \"0.1.0\"
+
+[members]
+root = \"Root <r@example.com>\"
+a = \"A <a@example.com>\"
+b = [\"B <b@example.com>\", \"Bee <bee@example.com>\"]
+c = \"C <c@example.com>\"
+myself = \"Me Myself <me@example.com>\"
+";
+
 /// Build a little project:
-///   root (stew.toml, .stew → Root)
-///   ├── x (.stew → A): one.rs (2 lines)
-///   │   └── y/z (.stew → B): two.rs (3 lines)
-///   └── plain.txt (1 line, Root's)
+///   root (stew.toml, .stew → root)
+///   ├── x (.stew → a): one.rs (2 lines)
+///   │   └── y/z (.stew → b): two.rs (3 lines)
+///   └── plain.txt (1 line, root's)
 fn scratch() -> tempfile::TempDir {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
-    fs::write(root.join("stew.toml"), "").unwrap();
-    fs::write(root.join(".stew"), "Root <r@example.com>\n").unwrap();
+    fs::write(root.join("stew.toml"), MANIFEST).unwrap();
+    fs::write(root.join(".stew"), "root\n").unwrap();
     fs::write(root.join("plain.txt"), "hello\n").unwrap();
     fs::create_dir_all(root.join("x/y/z")).unwrap();
-    fs::write(root.join("x/.stew"), "# owner\nA <a@example.com>\n").unwrap();
+    fs::write(root.join("x/.stew"), "# owner\na\n").unwrap();
     fs::write(root.join("x/one.rs"), "fn a() {}\nfn b() {}\n").unwrap();
-    fs::write(root.join("x/y/z/.stew"), "B <b@example.com>\n").unwrap();
+    fs::write(root.join("x/y/z/.stew"), "b\n").unwrap();
     fs::write(root.join("x/y/z/two.rs"), "1\n2\n3\n").unwrap();
     dir
 }
@@ -53,9 +64,9 @@ fn run(root: &Path, args: &[&str], stdin: Option<&str>) -> String {
 fn tree_shows_transitions() {
     let dir = scratch();
     let out = run(dir.path(), &["tree"], None);
-    assert!(out.contains(". — Root <r@example.com>"), "{out}");
-    assert!(out.contains("x — A <a@example.com>"), "{out}");
-    assert!(out.contains("y/z — B <b@example.com>"), "{out}");
+    assert!(out.contains(". — root"), "{out}");
+    assert!(out.contains("x — a"), "{out}");
+    assert!(out.contains("y/z — b"), "{out}");
 }
 
 #[test]
@@ -63,13 +74,13 @@ fn stewards_lists_unique_sorted() {
     let dir = scratch();
     fs::write(
         dir.path().join("x/y/.stew"),
-        "A <a@example.com>\nRoot <r@example.com>\n",
+        "a\nroot\n",
     )
     .unwrap();
     let out = run(dir.path(), &["stewards"], None);
     assert_eq!(
         out,
-        "A <a@example.com>\nB <b@example.com>\nRoot <r@example.com>\n"
+        "a\nb\nroot\n"
     );
 }
 
@@ -99,9 +110,9 @@ fn stewignore_excludes_files_and_stats_reports_ignored_lines() {
     // Owned counts are unchanged by the ignored files (Root gains one line
     // for .gitignore itself).
     let count = |l: String| l.split_whitespace().nth(2).unwrap().to_string();
-    assert_eq!(count(line("B <b@example.com>")), "3", "{out}");
-    assert_eq!(count(line("A <a@example.com>")), "2", "{out}");
-    assert_eq!(count(line("Root <r@example.com>")), "2", "{out}");
+    assert_eq!(count(line("b")), "3", "{out}");
+    assert_eq!(count(line("a")), "2", "{out}");
+    assert_eq!(count(line("root")), "2", "{out}");
     assert_eq!(last(line("total")), "7", "{out}");
     assert!(!out.contains(".gitignore"), "{out}");
     assert_eq!(last(line("ignored by .stewignore")), "7", "{out}");
@@ -124,9 +135,9 @@ fn stats_counts_lines_per_steward() {
     let out = run(dir.path(), &["stats"], None);
     // two.rs: 3 lines → B; one.rs: 2 lines → A; plain.txt: 1 line → Root.
     let line = |s: &str| out.lines().find(|l| l.contains(s)).unwrap().to_string();
-    assert!(line("B <b@example.com>").contains('3'), "{out}");
-    assert!(line("A <a@example.com>").contains('2'), "{out}");
-    assert!(line("Root <r@example.com>").contains('1'), "{out}");
+    assert!(line("b").contains('3'), "{out}");
+    assert!(line("a").contains('2'), "{out}");
+    assert!(line("root").contains('1'), "{out}");
     assert!(line("total").contains('6'), "{out}");
 }
 
@@ -147,9 +158,9 @@ fn diff_attributes_changes() {
 +goodbye
 ";
     let out = run(dir.path(), &["diff"], Some(diff));
-    assert!(out.contains("B <b@example.com>  (+2 -1)"), "{out}");
+    assert!(out.contains("b  (+2 -1)"), "{out}");
     assert!(out.contains("x/y/z/two.rs  +2 -1"), "{out}");
-    assert!(out.contains("Root <r@example.com>  (+1 -1)"), "{out}");
+    assert!(out.contains("root  (+1 -1)"), "{out}");
 }
 
 /// Like `run`, but returns (success, stdout) and feeds `stdin` if given.
@@ -183,7 +194,7 @@ fn which_prints_governing_stew_file() {
 fn unclaimed_lists_every_unclaimed_subtree() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
-    fs::write(root.join("stew.toml"), "").unwrap();
+    fs::write(root.join("stew.toml"), MANIFEST).unwrap();
     // u is unclaimed (empty .stew) but holds a mix of claimed and
     // unclaimed directories, so u itself is not an unclaimed subtree.
     fs::create_dir_all(root.join("u/c1/inner/deeper")).unwrap();
@@ -192,11 +203,11 @@ fn unclaimed_lists_every_unclaimed_subtree() {
     fs::create_dir_all(root.join("u/n2/deep")).unwrap();
     fs::create_dir_all(root.join("owned")).unwrap();
     fs::write(root.join("u/.stew"), "").unwrap();
-    fs::write(root.join("u/c1/.stew"), "A <a@example.com>\n").unwrap();
-    fs::write(root.join("u/c2/.stew"), "B <b@example.com>\n").unwrap();
+    fs::write(root.join("u/c1/.stew"), "a\n").unwrap();
+    fs::write(root.join("u/c2/.stew"), "b\n").unwrap();
     // An unclaimed directory inside a claimed one.
     fs::write(root.join("u/c1/inner/.stew"), "# nobody\n").unwrap();
-    fs::write(root.join("owned/.stew"), "R <r@example.com>\n").unwrap();
+    fs::write(root.join("owned/.stew"), "root\n").unwrap();
     // Lines under each unclaimed subtree are totalled; .stew and binary
     // files don't count.
     fs::write(root.join("u/n2/a.txt"), "1\n2\n").unwrap();
@@ -247,7 +258,7 @@ fn unclaimed_lists_every_unclaimed_subtree() {
 fn unclaimed_with_no_root_stew_lists_root() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
-    fs::write(root.join("stew.toml"), "").unwrap();
+    fs::write(root.join("stew.toml"), MANIFEST).unwrap();
     fs::create_dir_all(root.join("a/b")).unwrap();
     let out = run(root, &["unclaimed", &root.display().to_string()], None);
     assert_eq!(out.split_whitespace().next(), Some("."));
@@ -256,7 +267,7 @@ fn unclaimed_with_no_root_stew_lists_root() {
 #[test]
 fn which_fails_when_nothing_governs() {
     let dir = tempfile::tempdir().unwrap();
-    fs::write(dir.path().join("stew.toml"), "").unwrap();
+    fs::write(dir.path().join("stew.toml"), MANIFEST).unwrap();
     let root = dir.path().display().to_string();
     let (ok, out) = try_run(dir.path(), &["which", &root], None);
     assert!(!ok);
@@ -267,16 +278,16 @@ fn which_fails_when_nothing_governs() {
 fn add_creates_file_and_announces_parent_effect() {
     let dir = scratch();
     let sub = dir.path().join("x/y").display().to_string();
-    let out = run(dir.path(), &["add", "C <c@example.com>", &sub, "-y"], None);
+    let out = run(dir.path(), &["add", "c", &sub, "-y"], None);
     assert!(out.contains("away from x/.stew"), "{out}");
-    assert!(out.contains("- A <a@example.com>"), "{out}");
+    assert!(out.contains("- a"), "{out}");
     assert!(
-        out.contains("added C <c@example.com> to x/y/.stew"),
+        out.contains("added c to x/y/.stew"),
         "{out}"
     );
     assert_eq!(
         fs::read_to_string(dir.path().join("x/y/.stew")).unwrap(),
-        "C <c@example.com>\n"
+        "c\n"
     );
 }
 
@@ -284,16 +295,16 @@ fn add_creates_file_and_announces_parent_effect() {
 fn add_appends_and_ignores_duplicates() {
     let dir = scratch();
     let x = dir.path().join("x").display().to_string();
-    run(dir.path(), &["add", "C <c@example.com>", &x, "-y"], None);
+    run(dir.path(), &["add", "c", &x, "-y"], None);
     assert_eq!(
         fs::read_to_string(dir.path().join("x/.stew")).unwrap(),
-        "# owner\nA <a@example.com>\nC <c@example.com>\n"
+        "# owner\na\nc\n"
     );
-    let out = run(dir.path(), &["add", "A <a@example.com>", &x, "-y"], None);
+    let out = run(dir.path(), &["add", "a", &x, "-y"], None);
     assert!(out.contains("already a steward"), "{out}");
     assert_eq!(
         fs::read_to_string(dir.path().join("x/.stew")).unwrap(),
-        "# owner\nA <a@example.com>\nC <c@example.com>\n"
+        "# owner\na\nc\n"
     );
 }
 
@@ -303,7 +314,7 @@ fn add_quiet_suppresses_result_line() {
     let x = dir.path().join("x").display().to_string();
     let out = run(
         dir.path(),
-        &["add", "C <c@example.com>", &x, "-y", "-q"],
+        &["add", "c", &x, "-y", "-q"],
         None,
     );
     assert!(!out.contains("added"), "{out}");
@@ -313,12 +324,12 @@ fn add_quiet_suppresses_result_line() {
 fn add_prompt_can_be_declined() {
     let dir = scratch();
     let sub = dir.path().join("x/y").display().to_string();
-    let (ok, out) = try_run(dir.path(), &["add", "C <c@example.com>", &sub], Some("n\n"));
+    let (ok, out) = try_run(dir.path(), &["add", "c", &sub], Some("n\n"));
     assert!(!ok);
     assert!(out.contains("Proceed? [y/N]"), "{out}");
     assert!(!dir.path().join("x/y/.stew").exists());
 
-    let (ok, _) = try_run(dir.path(), &["add", "C <c@example.com>", &sub], Some("y\n"));
+    let (ok, _) = try_run(dir.path(), &["add", "c", &sub], Some("y\n"));
     assert!(ok);
     assert!(dir.path().join("x/y/.stew").exists());
 }
@@ -327,7 +338,7 @@ fn add_prompt_can_be_declined() {
 fn remove_last_steward_leaves_empty_file_meaning_unowned() {
     let dir = scratch();
     let z = dir.path().join("x/y/z").display().to_string();
-    let out = run(dir.path(), &["remove", "B <b@example.com>", &z, "-y"], None);
+    let out = run(dir.path(), &["remove", "b", &z, "-y"], None);
     assert!(out.contains("leaves x/y/z/.stew empty"), "{out}");
     assert!(out.contains("fall back to x/.stew"), "{out}");
     assert_eq!(
@@ -337,9 +348,14 @@ fn remove_last_steward_leaves_empty_file_meaning_unowned() {
 
     // The empty file is honoured: two.rs is now unowned, not A's.
     let out = run(dir.path(), &["stats"], None);
-    let line = |s: &str| out.lines().find(|l| l.contains(s)).unwrap().to_string();
+    let line = |s: &str| {
+        out.lines()
+            .find(|l| l.split_whitespace().next() == Some(s))
+            .unwrap()
+            .to_string()
+    };
     assert!(line("(unclaimed)").contains('3'), "{out}");
-    assert!(line("A <a@example.com>").contains('2'), "{out}");
+    assert!(line("a").contains('2'), "{out}");
     let out = run(dir.path(), &["tree"], None);
     assert!(out.contains("y/z — (no steward)"), "{out}");
 }
@@ -348,11 +364,11 @@ fn remove_last_steward_leaves_empty_file_meaning_unowned() {
 fn remove_keeps_comments_and_other_stewards() {
     let dir = scratch();
     let x = dir.path().join("x").display().to_string();
-    run(dir.path(), &["add", "C <c@example.com>", &x, "-y"], None);
-    run(dir.path(), &["remove", "A <a@example.com>", &x, "-y"], None);
+    run(dir.path(), &["add", "c", &x, "-y"], None);
+    run(dir.path(), &["remove", "a", &x, "-y"], None);
     assert_eq!(
         fs::read_to_string(dir.path().join("x/.stew")).unwrap(),
-        "# owner\nC <c@example.com>\n"
+        "# owner\nc\n"
     );
 }
 
@@ -376,17 +392,17 @@ fn me_uses_git_config_and_rm_is_an_alias() {
     let x = dir.path().join("x").display().to_string();
     let out = run(dir.path(), &["add", "me", &x, "-y"], None);
     assert!(
-        out.contains("added Me Myself <me@example.com> to x/.stew"),
+        out.contains("added myself to x/.stew"),
         "{out}"
     );
     let out = run(dir.path(), &["rm", "me", &x, "-y"], None);
     assert!(
-        out.contains("removed Me Myself <me@example.com> from x/.stew"),
+        out.contains("removed myself from x/.stew"),
         "{out}"
     );
     assert_eq!(
         fs::read_to_string(dir.path().join("x/.stew")).unwrap(),
-        "# owner\nA <a@example.com>\n"
+        "# owner\na\n"
     );
 }
 
@@ -396,7 +412,7 @@ fn remove_without_file_is_an_error() {
     let sub = dir.path().join("x/y").display().to_string();
     let (ok, _) = try_run(
         dir.path(),
-        &["remove", "A <a@example.com>", &sub, "-y"],
+        &["remove", "a", &sub, "-y"],
         None,
     );
     assert!(!ok);
@@ -413,4 +429,142 @@ fn missing_manifest_is_an_error() {
         .status()
         .unwrap();
     assert!(!status.success());
+}
+
+fn write_manifest(root: &Path, text: &str) {
+    fs::write(root.join("stew.toml"), text).unwrap();
+}
+
+/// Run and capture (success, stdout, stderr).
+fn run_full(root: &Path, args: &[&str]) -> (bool, String, String) {
+    let out = stew()
+        .arg("--root")
+        .arg(root)
+        .args(args)
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    (
+        out.status.success(),
+        String::from_utf8(out.stdout).unwrap(),
+        String::from_utf8(out.stderr).unwrap(),
+    )
+}
+
+#[test]
+fn manifest_version_must_match_binary() {
+    let dir = scratch();
+    let root = dir.path();
+    write_manifest(root, "version = \"9.9.9\"\n");
+    let (ok, _, err) = run_full(root, &["tree"]);
+    assert!(!ok);
+    assert!(err.contains("9.9.9"), "{err}");
+    assert!(err.contains(env!("CARGO_PKG_VERSION")), "{err}");
+
+    write_manifest(root, "[members]\n");
+    let (ok, _, err) = run_full(root, &["tree"]);
+    assert!(!ok);
+    assert!(err.contains("version"), "{err}");
+}
+
+#[test]
+fn manifest_rejects_bad_members() {
+    let dir = scratch();
+    let root = dir.path();
+    for bad in [
+        "version = \"0.1.0\"\n[members]\n\"bad-key\" = \"X <x@example.com>\"\n",
+        "version = \"0.1.0\"\n[members]\nok = 3\n",
+        "version = \"0.1.0\"\n[members]\nok = [\"X <x@example.com>\", 3]\n",
+        "version = \"0.1.0\"\n[members]\nok = \"\"\n",
+        "version = \"0.1.0\"\nmembers = 3\n",
+    ] {
+        write_manifest(root, bad);
+        let (ok, _, err) = run_full(root, &["tree"]);
+        assert!(!ok, "accepted {bad:?}");
+        assert!(err.contains("stew.toml"), "{err}");
+    }
+    // A missing [members] table is allowed (nobody is a member).
+    write_manifest(root, "version = \"0.1.0\"\n");
+    fs::write(root.join(".stew"), "").unwrap();
+    fs::write(root.join("x/.stew"), "").unwrap();
+    fs::write(root.join("x/y/z/.stew"), "").unwrap();
+    let (ok, _, _) = run_full(root, &["tree"]);
+    assert!(ok);
+}
+
+#[test]
+fn check_reports_unknown_keys_and_gates_other_commands() {
+    let dir = scratch();
+    let root = dir.path();
+    let (ok, out, err) = run_full(root, &["check"]);
+    assert!(ok, "{err}");
+    assert_eq!(out, "");
+
+    fs::write(root.join("x/.stew"), "a\nnobody\n").unwrap();
+    fs::write(root.join("x/y/z/.stew"), "Zed <z@example.com>\n").unwrap();
+    let (ok, out, err) = run_full(root, &["check"]);
+    assert!(!ok);
+    assert_eq!(out, "");
+    assert!(err.contains("x/.stew") && err.contains("nobody"), "{err}");
+    assert!(err.contains("x/y/z/.stew") && err.contains("Zed <z@example.com>"), "{err}");
+    assert!(!err.contains("\"a\""), "{err}");
+
+    // Every other command refuses to run until the check passes.
+    for args in [
+        vec!["tree"],
+        vec!["stats"],
+        vec!["stewards"],
+        vec!["unclaimed"],
+        vec!["which"],
+        vec!["add", "c", "x", "-y"],
+        vec!["remove", "a", "x", "-y"],
+    ] {
+        let (ok, out, err) = run_full(root, &args);
+        assert!(!ok, "{args:?} ran despite failing check");
+        assert_eq!(out, "", "{args:?}");
+        assert!(err.contains("nobody"), "{args:?}: {err}");
+    }
+    assert_eq!(
+        fs::read_to_string(root.join("x/.stew")).unwrap(),
+        "a\nnobody\n"
+    );
+}
+
+#[test]
+fn add_rejects_unknown_member() {
+    let dir = scratch();
+    let x = dir.path().join("x").display().to_string();
+    let (ok, _, err) = run_full(dir.path(), &["add", "nobody", &x, "-y"]);
+    assert!(!ok);
+    assert!(err.contains("nobody"), "{err}");
+    assert_eq!(
+        fs::read_to_string(dir.path().join("x/.stew")).unwrap(),
+        "# owner\na\n"
+    );
+}
+
+#[test]
+fn me_matches_any_identity_of_a_member() {
+    let dir = scratch();
+    let git = |args: &[&str]| {
+        assert!(Command::new("git")
+            .arg("-C")
+            .arg(dir.path())
+            .args(args)
+            .stdout(Stdio::null())
+            .status()
+            .unwrap()
+            .success());
+    };
+    git(&["init", "-q"]);
+    git(&["config", "user.name", "Bee"]);
+    git(&["config", "user.email", "bee@example.com"]);
+    let x = dir.path().join("x").display().to_string();
+    let out = run(dir.path(), &["add", "me", &x, "-y"], None);
+    assert!(out.contains("added b to x/.stew"), "{out}");
+
+    git(&["config", "user.name", "Stranger"]);
+    let (ok, _, err) = run_full(dir.path(), &["add", "me", &x, "-y"]);
+    assert!(!ok);
+    assert!(err.contains("Stranger <bee@example.com>"), "{err}");
 }

@@ -10,9 +10,9 @@ pub const ROOT_MANIFEST: &str = "stew.toml";
 pub const STEW_FILE: &str = ".stew";
 pub const STEW_IGNORE: &str = ".stewignore";
 
-/// A steward identity as it appears in a `.stew` file, e.g.
-/// `Jane Doe <jane@example.com>`. Kept as the raw (trimmed) line; identities
-/// compare equal on their exact text.
+/// A steward as it appears in a `.stew` file: a member key from the
+/// `[members]` table of `stew.toml`, e.g. `jane`. Kept as the raw (trimmed)
+/// line; `check` verifies that every key is a known member.
 pub type Steward = String;
 
 /// Walk up from `start` looking for a directory containing `stew.toml`.
@@ -32,16 +32,80 @@ pub fn find_root(start: &Path) -> Result<PathBuf> {
     );
 }
 
-/// Validate the root manifest. It is currently a placeholder, but it must at
-/// least be well-formed TOML so we can add fields later without breaking
-/// existing projects.
-pub fn load_manifest(root: &Path) -> Result<()> {
+/// The contents of `stew.toml`.
+#[derive(Debug, Default, Clone)]
+pub struct Manifest {
+    /// Member keys (as written in `.stew` files) to the git identities
+    /// they stand for, e.g. `jane` → `["Jane Doe <jane@example.com>"]`.
+    pub members: BTreeMap<String, Vec<String>>,
+}
+
+impl Manifest {
+    /// The member key whose identities include `identity`, if any.
+    pub fn member_for_identity(&self, identity: &str) -> Option<&str> {
+        self.members
+            .iter()
+            .find(|(_, ids)| ids.iter().any(|i| i == identity))
+            .map(|(k, _)| k.as_str())
+    }
+}
+
+/// A member key: alphanumeric characters and underscores only.
+pub fn is_valid_member_key(key: &str) -> bool {
+    !key.is_empty() && key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+/// Load and validate the root manifest. The `version` field must equal
+/// this binary's version; `[members]` (optional) maps member keys to one or
+/// more git identities.
+pub fn load_manifest(root: &Path) -> Result<Manifest> {
     let path = root.join(ROOT_MANIFEST);
     let text =
         fs::read_to_string(&path).with_context(|| format!("cannot read {}", path.display()))?;
-    text.parse::<toml::Table>()
-        .with_context(|| format!("{} is not valid TOML", path.display()))?;
-    Ok(())
+    parse_manifest(&text).with_context(|| format!("invalid {}", path.display()))
+}
+
+pub fn parse_manifest(text: &str) -> Result<Manifest> {
+    let table: toml::Table = text.parse().context("not valid TOML")?;
+
+    let want = env!("CARGO_PKG_VERSION");
+    match table.get("version") {
+        None => bail!("missing `version` field (this is stew {want}, so add `version = \"{want}\"`)"),
+        Some(toml::Value::String(v)) if v == want => {}
+        Some(toml::Value::String(v)) => {
+            bail!("version {v} does not match this stew binary, which is version {want}")
+        }
+        Some(_) => bail!("`version` must be a string"),
+    }
+
+    let mut members = BTreeMap::new();
+    match table.get("members") {
+        None => {}
+        Some(toml::Value::Table(t)) => {
+            for (key, value) in t {
+                if !is_valid_member_key(key) {
+                    bail!("member key {key:?} is not valid: use only letters, digits and `_`");
+                }
+                let ids: Vec<String> = match value {
+                    toml::Value::String(s) => vec![s.clone()],
+                    toml::Value::Array(a) => a
+                        .iter()
+                        .map(|v| match v {
+                            toml::Value::String(s) => Ok(s.clone()),
+                            _ => bail!("member {key}: every entry must be a string"),
+                        })
+                        .collect::<Result<_>>()?,
+                    _ => bail!("member {key}: value must be a string or a list of strings"),
+                };
+                if ids.iter().any(|i| i.trim().is_empty()) {
+                    bail!("member {key}: identities must not be empty");
+                }
+                members.insert(key.clone(), ids);
+            }
+        }
+        Some(_) => bail!("`members` must be a table"),
+    }
+    Ok(Manifest { members })
 }
 
 /// Parse a `.stew` file: one steward per line; blank lines and `#` comments
@@ -62,6 +126,7 @@ pub fn parse_stew(text: &str) -> Vec<Steward> {
 #[derive(Debug, Default)]
 pub struct StewMap {
     pub root: PathBuf,
+    pub manifest: Manifest,
     pub dirs: BTreeMap<PathBuf, Vec<Steward>>,
 }
 
@@ -69,7 +134,7 @@ impl StewMap {
     /// Scan the project (respecting `.gitignore` etc.) and collect all
     /// `.stew` files.
     pub fn load(root: &Path) -> Result<Self> {
-        load_manifest(root)?;
+        let manifest = load_manifest(root)?;
         let mut dirs = BTreeMap::new();
         for entry in walker(root).build() {
             let entry = entry?;
@@ -93,8 +158,20 @@ impl StewMap {
         }
         Ok(StewMap {
             root: root.to_path_buf(),
+            manifest,
             dirs,
         })
+    }
+
+    /// Every `(directory, key)` where a `.stew` file names a key that is
+    /// not in `[members]`, in path order. Empty when the project is
+    /// consistent.
+    pub fn unknown_members(&self) -> Vec<(&Path, &Steward)> {
+        self.dirs
+            .iter()
+            .flat_map(|(dir, stewards)| stewards.iter().map(move |s| (dir.as_path(), s)))
+            .filter(|(_, s)| !self.manifest.members.contains_key(*s))
+            .collect()
     }
 
     /// Resolve a user-supplied directory to a path relative to the project
@@ -238,6 +315,46 @@ mod tests {
     fn parse_skips_comments_and_blanks() {
         let s = parse_stew("# team\nAlice <a@x.com>\n\n  Bob <b@x.com>  \n");
         assert_eq!(s, vec!["Alice <a@x.com>", "Bob <b@x.com>"]);
+    }
+
+    #[test]
+    fn manifest_parses_members() {
+        let m = parse_manifest(&format!(
+            "version = \"{}\"\n[members]\na = \"A <a@x>\"\nb_2 = [\"B <b@x>\", \"Bee <bee@x>\"]\n",
+            env!("CARGO_PKG_VERSION")
+        ))
+        .unwrap();
+        assert_eq!(m.members["a"], vec!["A <a@x>"]);
+        assert_eq!(m.members["b_2"], vec!["B <b@x>", "Bee <bee@x>"]);
+        assert_eq!(m.member_for_identity("Bee <bee@x>"), Some("b_2"));
+        assert_eq!(m.member_for_identity("Nobody <n@x>"), None);
+    }
+
+    #[test]
+    fn manifest_requires_matching_version() {
+        assert!(parse_manifest("").is_err());
+        assert!(parse_manifest("version = \"0.0.0-nope\"").is_err());
+        assert!(parse_manifest(&format!("version = \"{}\"", env!("CARGO_PKG_VERSION"))).is_ok());
+    }
+
+    #[test]
+    fn member_key_charset() {
+        assert!(is_valid_member_key("jane_doe2"));
+        assert!(!is_valid_member_key(""));
+        assert!(!is_valid_member_key("jane-doe"));
+        assert!(!is_valid_member_key("Jane Doe <j@x>"));
+    }
+
+    #[test]
+    fn unknown_members_lists_keys_not_in_manifest() {
+        let mut map = StewMap::default();
+        map.manifest.members.insert("a".into(), vec!["A <a@x>".into()]);
+        map.dirs.insert(PathBuf::from(""), vec!["a".into(), "ghost".into()]);
+        map.dirs.insert(PathBuf::from("x"), vec!["a".into()]);
+        let bad = map.unknown_members();
+        assert_eq!(bad.len(), 1);
+        assert_eq!(bad[0].0, Path::new(""));
+        assert_eq!(bad[0].1, "ghost");
     }
 
     #[test]

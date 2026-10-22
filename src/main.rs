@@ -27,6 +27,11 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Check that every .stew file names only members listed in stew.toml
+    ///
+    /// Every other command runs this check first and refuses to proceed if
+    /// it fails.
+    Check,
     /// Show the tree of stewardship transitions
     Tree,
     /// Show lines owned per steward, and each steward's share of the total.
@@ -90,8 +95,12 @@ fn main() -> Result<()> {
         None => model::find_root(Path::new("."))?,
     };
     let map = StewMap::load(&root)?;
+    if !check(&map) {
+        std::process::exit(1);
+    }
 
     match cli.command {
+        Command::Check => {}
         Command::Tree => tree(&map),
         Command::Stats => stats(&map)?,
         Command::Diff => cmd_diff(&map)?,
@@ -99,11 +108,11 @@ fn main() -> Result<()> {
         Command::Unclaimed { dir } => unclaimed(&map, &dir)?,
         Command::Which { dir } => which(&map, &dir)?,
         Command::Add { target, opts } => {
-            let (dir, steward) = target.resolve(&map.root)?;
+            let (dir, steward) = target.resolve(&map)?;
             edit::add(&map, &dir, &steward, &opts)?
         }
         Command::Remove { target, opts } => {
-            let (dir, steward) = target.resolve(&map.root)?;
+            let (dir, steward) = target.resolve(&map)?;
             edit::remove(&map, &dir, &steward, &opts)?
         }
     }
@@ -116,6 +125,22 @@ fn fmt_stewards(stewards: &[Steward]) -> String {
     } else {
         stewards.join(", ")
     }
+}
+
+// --------------------------------------------------------------- check ----
+
+/// Report every key in a `.stew` file that is not a member in `stew.toml`,
+/// one per line on stderr. Returns whether the project is consistent.
+fn check(map: &StewMap) -> bool {
+    let unknown = map.unknown_members();
+    for (dir, key) in &unknown {
+        eprintln!(
+            "{}: unknown member {key:?} (not in [members] of {})",
+            dir.join(model::STEW_FILE).display(),
+            model::ROOT_MANIFEST
+        );
+    }
+    unknown.is_empty()
 }
 
 // ---------------------------------------------------------------- tree ----

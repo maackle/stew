@@ -22,22 +22,30 @@ pub struct Opts {
     pub quiet: bool,
 }
 
-/// The positional arguments of `add`/`remove`: either `STEWARD DIR`, or
-/// `me DIR` to use the identity from git config.
+/// The positional arguments of `add`/`remove`: either `MEMBER DIR`, or
+/// `me DIR` to use the member whose identities include the one from git
+/// config.
 #[derive(Args, Debug)]
 pub struct Target {
-    /// Steward identity and directory (or `me` and a directory)
+    /// Member key and directory (or `me` and a directory)
     #[arg(required = true, num_args = 2, value_names = ["STEWARD", "DIR"], hide_possible_values = true)]
     pub args: Vec<String>,
 }
 
 impl Target {
-    pub fn resolve(&self, root: &Path) -> Result<(PathBuf, String)> {
+    pub fn resolve(&self, map: &StewMap) -> Result<(PathBuf, String)> {
         let [a, b] = self.args.as_slice() else {
             unreachable!("clap enforces exactly two arguments");
         };
         if a == "me" {
-            Ok((PathBuf::from(b), git_identity(root)?))
+            let id = git_identity(&map.root)?;
+            let Some(key) = map.manifest.member_for_identity(&id) else {
+                bail!(
+                    "no member in {} has the identity {id} (from git config)",
+                    model::ROOT_MANIFEST
+                );
+            };
+            Ok((PathBuf::from(b), key.to_string()))
         } else {
             Ok((PathBuf::from(b), a.clone()))
         }
@@ -112,8 +120,11 @@ fn read_stew(path: &Path) -> Result<Option<String>> {
 
 pub fn add(map: &StewMap, dir: &Path, steward: &str, opts: &Opts) -> Result<()> {
     let steward = steward.trim();
-    if steward.is_empty() || steward.starts_with('#') {
-        bail!("invalid steward {steward:?}");
+    if !map.manifest.members.contains_key(steward) {
+        bail!(
+            "{steward:?} is not a member; add it to [members] in {} first",
+            model::ROOT_MANIFEST
+        );
     }
     let rel = map.resolve_dir(dir)?;
     let file = map.root.join(&rel).join(model::STEW_FILE);
