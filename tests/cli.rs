@@ -85,7 +85,7 @@ fn stewards_lists_unique_sorted() {
 }
 
 #[test]
-fn stewignore_excludes_files_and_stats_reports_ignored_lines() {
+fn stewignore_excludes_files_from_stats_and_unclaimed() {
     let dir = scratch();
     let root = dir.path();
     // .gitignore only applies inside a git repo.
@@ -116,7 +116,6 @@ fn stewignore_excludes_files_and_stats_reports_ignored_lines() {
     assert_eq!(count(line("root")), "12", "{out}");
     assert_eq!(last(line("TOTAL")), "21", "{out}");
     assert!(!out.contains(".gitignore"), "{out}");
-    assert_eq!(last(line("ignored by .stewignore")), "7", "{out}");
 
     // unclaimed also respects .stewignore.
     fs::create_dir_all(root.join("free")).unwrap();

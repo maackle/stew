@@ -377,35 +377,16 @@ fn insert(node: &mut Node, dir: &Path, stewards: &[Steward]) {
     });
 }
 
-/// Which ignore files a walk honours. `.git` is always excluded.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Ignores {
-    /// Nothing but `.git`.
-    None,
-    /// `.gitignore` (and git's global/exclude files).
-    Git,
-    /// `.gitignore` plus `.stewignore`, the normal mode for every command.
-    GitAndStew,
-}
-
-/// A walker rooted at `root` honouring the given ignore files. `.stew` files
-/// are hidden files, so hidden entries must be included; `.git` is excluded
-/// explicitly. `.stewignore` uses gitignore syntax and may appear in any
-/// directory, applying to that directory's subtree.
-pub fn walker_with(root: &Path, ignores: Ignores) -> ignore::WalkBuilder {
+/// A walker rooted at `root` that respects `.gitignore` (and git's
+/// global/exclude files) and `.stewignore`. `.stew` files are hidden files,
+/// so hidden entries must be included; `.git` is excluded explicitly.
+/// `.stewignore` uses gitignore syntax and may appear in any directory,
+/// applying to that directory's subtree.
+pub fn walker(root: &Path) -> ignore::WalkBuilder {
     let mut b = ignore::WalkBuilder::new(root);
     b.hidden(false).filter_entry(|e| e.file_name() != ".git");
-    let git = ignores != Ignores::None;
-    b.git_ignore(git).git_global(git).git_exclude(git);
-    if ignores == Ignores::GitAndStew {
-        b.add_custom_ignore_filename(STEW_IGNORE);
-    }
+    b.add_custom_ignore_filename(STEW_IGNORE);
     b
-}
-
-/// The normal walker: respects `.gitignore` and `.stewignore`.
-pub fn walker(root: &Path) -> ignore::WalkBuilder {
-    walker_with(root, Ignores::GitAndStew)
 }
 
 #[cfg(test)]

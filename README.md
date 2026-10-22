@@ -69,8 +69,7 @@ path label, so if `./x/.stew` names A and `./x/y/z/.stew` names B:
 Lines of code owned per steward and each steward's share of the project
 total. Walks the tree respecting `.gitignore` and `.stewignore` and skips
 binary files. When a directory names multiple stewards, its lines count fully
-toward each of them. After the total, it reports how many lines `.stewignore`
-left out.
+toward each of them.
 
 ### `stew stewards`
 

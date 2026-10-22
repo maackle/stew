@@ -4,7 +4,7 @@ mod model;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use model::{build_tree, Ignores, Node, StewMap, Steward};
+use model::{build_tree, Node, StewMap, Steward};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::Read;
@@ -206,12 +206,7 @@ fn stats(map: &StewMap) -> Result<()> {
     let mut rows: Vec<(&String, &usize)> = lines_by_steward.iter().collect();
     rows.sort_by(|a, b| b.1.cmp(a.1).then(a.0.cmp(b.0)));
 
-    let width = rows
-        .iter()
-        .map(|(s, _)| s.len())
-        .chain(["ignored by .stewignore".len()])
-        .max()
-        .unwrap_or(5);
+    let width = rows.iter().map(|(s, _)| s.len()).max().unwrap_or(5);
     for (steward, lines) in &rows {
         let pct = if total == 0 {
             0.0
@@ -221,14 +216,6 @@ fn stats(map: &StewMap) -> Result<()> {
         println!("{steward:<width$}  {lines:>8}  {pct:>5.1}%");
     }
     println!("{:<width$}  {total:>8}", "TOTAL");
-    // // Lines .stewignore hid. (Lines hidden by .gitignore aren't reported:
-    // // counting them means reading every build artifact, which is slow.)
-    // let without_stewignore = count_lines_under_with(map, &map.root, Ignores::Git)?;
-    // println!(
-    //     "{:<width$}  {:>8}",
-    //     "ignored by .stewignore",
-    //     without_stewignore.saturating_sub(total)
-    // );
     Ok(())
 }
 
@@ -238,13 +225,8 @@ fn stats(map: &StewMap) -> Result<()> {
 /// `stats`: ignore files respected, binary files skipped, and files
 /// claimed by a member's override not counted.
 fn count_lines_under(map: &StewMap, dir: &Path) -> Result<usize> {
-    count_lines_under_with(map, dir, Ignores::GitAndStew)
-}
-
-/// As `count_lines_under`, honouring only the given ignore files.
-fn count_lines_under_with(map: &StewMap, dir: &Path, ignores: Ignores) -> Result<usize> {
     let mut total = 0;
-    for entry in model::walker_with(dir, ignores).build() {
+    for entry in model::walker(dir).build() {
         let entry = entry?;
         if !entry.file_type().is_some_and(|t| t.is_file()) {
             continue;
