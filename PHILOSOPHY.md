@@ -20,8 +20,7 @@ Stew works by facilitating a feedback loop:
 
 1. **Inspect**: gain visibility into current responsibilities
 1. **Decide**: make decisions based on responsiblities
-1. **Judge**: observe outcomes of those decisions
-1. **Refine**: refine responsibilities
+2. **Refine**: refine responsibilities based on outcomes
 
 ## Inspect
 
@@ -42,13 +41,10 @@ With the knowledge encoded by stew, you might decide to:
 - ask for someone else to share or take over responsibility on something you're holding, when you have too much to hold
 - come up with a plan for adding redundant responsiblity when you notice that too much of the code is held by only one person
 
-## Judge
-
-Observe the effects of the decisions made, and see if they were good decisions or if you wished they had gone differently:
-
-- when I was asked to review code I'm responsible for, did I understand it well, and was I still able to give detailed feedback? (If so maybe I'm not as responsible as I thought.)
-- when I skimmed code that I'm not responsible for, or saw code merged in that I didn't review, did I have a lot to say about it? (If so maybe I'm more responsible than I thought.)
-
 ## Refine
 
-If judging a decision surfaced a mismatch in the represented responsibilities, then you can make changes to reflect what seems truer.
+Looking at the decisions you made, were they good decisions? Does the representation of responsibilities seem true? If not, make some changes to reflect what seems truer.
+
+- when I was asked to review code I'm responsible for, did I understand it well, and was I still able to give detailed feedback? If so, maybe I'm not as responsible as I thought and should remove myself from that part.
+- when I skimmed code that I'm not responsible for, or saw code merged in that I didn't review, did I have a lot to say about it? If so maybe I'm more responsible than I thought.
+- do I notice that one person's responsibilities just keep growing and growing as they add more and more code? Maybe we need to sow some redundancy into those parts.
